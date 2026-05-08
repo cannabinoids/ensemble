@@ -45,6 +45,16 @@ else
   fi
 fi
 
+# ─── 1b. Preflight checks (auth + DNS + service age) ───
+# Skip with COLLAB_SKIP_PREFLIGHT=1 if needed
+if [ "${COLLAB_SKIP_PREFLIGHT:-0}" != "1" ]; then
+  if ! "$SCRIPT_DIR/collab-preflight.sh" 2>&1 | sed 's/^/  /'; then
+    echo -e "\n  ${R}\033[91m✗${R} Preflight FAILED — fix above issues then re-run."
+    echo -e "  ${D}(bypass with COLLAB_SKIP_PREFLIGHT=1, but agents will likely fail)${R}"
+    exit 1
+  fi
+fi
+
 # ─── 2. Create team (use env vars to avoid quoting hell) ───
 TEAM_NAME="collab-$(python3 -c 'import random,time; print(str(time.time_ns()//1000000)+"-"+str(random.randint(1000,9999)))')"
 PAYLOAD_FILE=$(mktemp)
@@ -183,6 +193,13 @@ if [ "${MC:-0}" -gt "0" ]; then
   echo -e "\r  ${CHECK} Agents communicating ${D}(${MC} messages)${R}"
 else
   echo -e "\r  ${SPIN} Agents warming up...       "
+fi
+
+# ─── 6b. Postcheck (run in background after 30s — kills team if agents broken) ───
+# Skip with COLLAB_SKIP_POSTCHECK=1
+if [ "${COLLAB_SKIP_POSTCHECK:-0}" != "1" ]; then
+  nohup bash -c "sleep 25 && '$SCRIPT_DIR/collab-postcheck.sh' '$TEAM_ID' 5" \
+    > "$RUNTIME_DIR/postcheck.log" 2>&1 &
 fi
 
 # ─── Output ───
