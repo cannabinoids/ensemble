@@ -79,6 +79,49 @@ else
      Fix: codex login"
 fi
 
+# ─── 4b. Codex update-prompt suppression (regression van 2026-05-10) ───
+# Codex CLI toont op startup een interactieve "Update available!" prompt zodra
+# latest_version > dismissed_version in ~/.codex/version.json. De ensemble
+# spawn-flow stuurt vervolgens een Enter, wat optie 1 (update now) selecteert
+# → codex draait `brew upgrade` en exit terug naar zsh, waarna alle prompt-
+# berichten in de zsh shell belanden (en de pane corrupt raakt). Hard-block:
+# zet dismissed_version gelijk aan latest_version vóór elke spawn.
+CODEX_VERSION_FILE="${HOME}/.codex/version.json"
+if [ -f "$CODEX_VERSION_FILE" ]; then
+  CODEX_PROMPT_STATE=$(VERSION_FILE="$CODEX_VERSION_FILE" python3 - <<'PY'
+import json, os, sys
+path = os.environ['VERSION_FILE']
+try:
+    with open(path) as f:
+        data = json.load(f)
+except Exception as e:
+    print(f"unreadable: {e}")
+    sys.exit(0)
+latest = data.get('latest_version')
+dismissed = data.get('dismissed_version')
+if not latest:
+    print("no-latest")
+    sys.exit(0)
+if dismissed == latest:
+    print(f"already-dismissed:{latest}")
+    sys.exit(0)
+data['dismissed_version'] = latest
+with open(path, 'w') as f:
+    json.dump(data, f)
+print(f"dismissed:{latest}")
+PY
+)
+  case "$CODEX_PROMPT_STATE" in
+    already-dismissed:*) ok "Codex update-prompt al gedismissed (${CODEX_PROMPT_STATE#already-dismissed:})" ;;
+    dismissed:*)         ok "Codex update-prompt onschadelijk gemaakt (${CODEX_PROMPT_STATE#dismissed:})" ;;
+    no-latest)           warn "Codex version.json zonder latest_version (kan ok zijn na verse install)" ;;
+    unreadable:*)        warn "Codex version.json onleesbaar — startup-prompt kan herstarten ($CODEX_PROMPT_STATE)" ;;
+    *)                   warn "Codex version.json check onverwacht: $CODEX_PROMPT_STATE" ;;
+  esac
+else
+  warn "Codex version.json niet gevonden (~/.codex/version.json) — startup-prompt-suppressie skipped"
+fi
+
 # ─── 5. Claude CLI auth (3-second smoke test) ───
 if ! command -v claude > /dev/null 2>&1; then
   fail 3 "claude binary not in PATH
