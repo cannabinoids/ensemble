@@ -18,6 +18,16 @@ source "$SCRIPT_DIR/collab-paths.sh"
 CWD="${1:-.}"
 TASK="${2:?Usage: collab-launch.sh <cwd> <task>}"
 AGENTS="${3:-}"  # Optional: comma-separated agent names (e.g. "gemini,claude")
+
+# ─── Auto-fallback to codex-only when claude auth is dead (set by preflight) ───
+# Preflight writes /tmp/collab-agents-override.txt when claude tmux-probe failed.
+# Only kicks in if caller didn't specify AGENTS explicitly.
+if [ -z "$AGENTS" ] && [ -f /tmp/collab-agents-override.txt ]; then
+  AGENTS=$(cat /tmp/collab-agents-override.txt 2>/dev/null || echo "")
+  if [ -n "$AGENTS" ]; then
+    echo -e "  \033[93m!\033[0m Auto-fallback aktief: agents=$AGENTS (zie preflight)"
+  fi
+fi
 API="${ENSEMBLE_URL:-http://localhost:23000}"
 HOST_ID="${ENSEMBLE_HOST_ID:-local}"
 

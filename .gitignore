@@ -28,3 +28,43 @@ Thumbs.db
 
 # JSONL persistence files (local data)
 *.jsonl
+
+# === safe-sweep DR excludes ===
+# Secrets — NOOIT naar remote
+.env
+.env.*
+*.env
+!.env.example
+!.env.sample
+!*.env.example
+.dev.vars
+*.pem
+*.key
+!*.pub
+private.key
+secrets/
+*secret*.env
+credentials.json
+.local-secrets/
+# Build / cache / artifacts (zitten in restic, niet in git)
+node_modules/
+.next/
+dist/
+build/
+.wrangler/
+.turbo/
+DerivedData/
+Pods/
+*.xcframework/
+.local-build/
+.local-secrets/
+voiceink-backups/
+# Grote binaries
+*.dmg
+*.tar.gz
+*.zip
+*.mp4
+*.wav
+*.bin
+*.sst
+*.pack

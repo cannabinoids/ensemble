@@ -66,6 +66,44 @@ for host in api.openai.com api.anthropic.com; do
 done
 ok "DNS resolves api.openai.com + api.anthropic.com"
 
+# ─── 3b. TMUX DNS-staleness check (regression 2026-05-13) ───
+# Het tmux-server proces cached zijn eigen libc-resolver. Na uren draaien valt
+# getaddrinfo() in tmux-spawned children silent uit ("Unknown host") terwijl
+# `host` op shell-niveau het wel doet. Resultaat: codex/claude in tmux krijgen
+# stream-disconnects bij elke api-call. Detecteer door ping in verse pane;
+# faal → kill-server (effe geen attached clients = veilig).
+TMUX_DNS_SESS="preflight-dns-$$"
+TMUX_DNS_OUT="/tmp/preflight-dns-$$.out"
+rm -f "$TMUX_DNS_OUT"
+tmux new-session -d -s "$TMUX_DNS_SESS" -c /tmp 2>/dev/null
+tmux send-keys -t "$TMUX_DNS_SESS" -l "ping -c 1 -W 2 api.openai.com > $TMUX_DNS_OUT 2>&1; echo PINGDONE_$$ >> $TMUX_DNS_OUT"
+tmux send-keys -t "$TMUX_DNS_SESS" C-m
+for _ in $(seq 1 8); do
+  grep -q "PINGDONE_$$" "$TMUX_DNS_OUT" 2>/dev/null && break
+  sleep 0.5
+done
+tmux kill-session -t "$TMUX_DNS_SESS" 2>/dev/null
+TMUX_DNS_RESULT=$(cat "$TMUX_DNS_OUT" 2>/dev/null || echo "")
+rm -f "$TMUX_DNS_OUT"
+
+if echo "$TMUX_DNS_RESULT" | grep -qE "PING api\.openai\.com"; then
+  ok "TMUX DNS resolver healthy"
+elif echo "$TMUX_DNS_RESULT" | grep -qE "Unknown host|cannot resolve"; then
+  warn "TMUX DNS resolver stale — auto-fix: killing tmux server"
+  # Save list of any attached clients (rare since iTerm clients live elsewhere)
+  ATTACHED=$(tmux list-clients 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$ATTACHED" -gt "0" ]; then
+    warn "  $ATTACHED tmux client(s) attached — skipping kill (would disrupt user)"
+    warn "  Manual fix: detach clients (Ctrl+B d) en re-run /collab"
+    fail 5 "TMUX DNS dead and clients attached — cannot auto-fix"
+  fi
+  tmux kill-server 2>/dev/null
+  sleep 0.5
+  ok "TMUX server killed; new spawns will inherit fresh resolver"
+else
+  warn "TMUX DNS probe inconclusive: ${TMUX_DNS_RESULT:0:120}"
+fi
+
 # ─── 4. Codex CLI auth ───
 if ! command -v codex > /dev/null 2>&1; then
   fail 4 "codex binary not in PATH
@@ -77,6 +115,19 @@ if echo "$CODEX_AUTH" | grep -qiE "logged in"; then
 else
   fail 4 "Codex not authenticated. Status: $CODEX_AUTH
      Fix: codex login"
+fi
+
+# ─── 4a. Codex quota probe (regression 2026-05-13: 'usage limit hit' isn't ──
+#         caught by `codex login status` — only by an actual exec call). Run a
+#         minimal `codex exec` and look for the limit-message. Costs ~1 token.
+CODEX_QUOTA_OUT=$(timeout 25 codex exec --dangerously-bypass-approvals-and-sandbox "say ok" 2>&1 | tail -5)
+if echo "$CODEX_QUOTA_OUT" | grep -qiE "hit your usage limit|usage limit|rate.?limit|quota"; then
+  RESET_TIME=$(echo "$CODEX_QUOTA_OUT" | grep -oE "try again at[^.]*\." | head -1)
+  warn "Codex quota dead: ${RESET_TIME:-(unknown reset time)} — codex-1 disabled this run"
+  CODEX_DEAD=1
+else
+  ok "Codex quota healthy (probe responded)"
+  CODEX_DEAD=0
 fi
 
 # ─── 4b. Codex update-prompt suppression (regression van 2026-05-10) ───
@@ -122,32 +173,64 @@ else
   warn "Codex version.json niet gevonden (~/.codex/version.json) — startup-prompt-suppressie skipped"
 fi
 
-# ─── 5. Claude CLI auth (3-second smoke test) ───
+# ─── 5. Claude CLI auth — test in TMUX-context (where agents actually spawn) ───
+# REGRESSION 2026-05-13: previous test ran in caller shell. When the caller is a
+# Claude Code session under Happy, that shell has in-process auth that does NOT
+# propagate to children. Result: preflight passed but spawned claude in tmux
+# was "Not logged in", agents died silently. This test now runs in the same
+# context as the real spawn (fresh tmux pane, unset CLAUDECODE).
 if ! command -v claude > /dev/null 2>&1; then
-  fail 3 "claude binary not in PATH
-     Fix: check PATH / reinstall claude CLI"
+  warn "claude binary not in PATH — Claude-2 will be disabled, codex-only mode"
+  echo "codex" > /tmp/collab-agents-override.txt
+else
+  CLAUDE_PROBE_SESS="collab-preflight-claude-$$"
+  CLAUDE_PROBE_OUT="/tmp/collab-preflight-claude-$$.out"
+  rm -f "$CLAUDE_PROBE_OUT"
+  tmux new-session -d -s "$CLAUDE_PROBE_SESS" -c "$HOME" 2>/dev/null
+  tmux send-keys -t "$CLAUDE_PROBE_SESS" -l " unset CLAUDECODE; claude auth status > $CLAUDE_PROBE_OUT 2>&1; echo DONE_$$ >> $CLAUDE_PROBE_OUT"
+  tmux send-keys -t "$CLAUDE_PROBE_SESS" C-m
+  # Wait up to 8s for probe
+  for _ in $(seq 1 16); do
+    grep -q "DONE_$$" "$CLAUDE_PROBE_OUT" 2>/dev/null && break
+    sleep 0.5
+  done
+  tmux kill-session -t "$CLAUDE_PROBE_SESS" 2>/dev/null
+
+  CLAUDE_PROBE=$(cat "$CLAUDE_PROBE_OUT" 2>/dev/null || echo "")
+  rm -f "$CLAUDE_PROBE_OUT"
+
+  if echo "$CLAUDE_PROBE" | grep -q '"loggedIn": true'; then
+    ok "Claude auth verified in spawn-context (tmux)"
+    CLAUDE_DEAD=0
+  elif echo "$CLAUDE_PROBE" | grep -qE '"loggedIn": false|"authMethod": "none"'; then
+    warn "Claude NOT logged in in spawn-context"
+    warn "  Fix permanent: open fresh terminal (zonder Happy) en run: claude /login"
+    CLAUDE_DEAD=1
+  else
+    warn "Claude auth-probe inconclusive (probe output: ${CLAUDE_PROBE:0:120})"
+    CLAUDE_DEAD=1
+  fi
 fi
 
-# Run claude --print with timeout; expect non-empty, non-error output
-CLAUDE_OUTPUT=$(timeout 15 claude --permission-mode auto --print "respond with exactly 'pong'" 2>&1)
-CLAUDE_EXIT=$?
+# ─── Decide which agents to spawn ───
+CODEX_DEAD="${CODEX_DEAD:-0}"
+CLAUDE_DEAD="${CLAUDE_DEAD:-0}"
 
-if [ "$CLAUDE_EXIT" -ne 0 ]; then
-  fail 3 "Claude CLI failed (exit $CLAUDE_EXIT). Output: ${CLAUDE_OUTPUT:0:200}
-     Fix: claude  (interactive login)"
+if [ "$CODEX_DEAD" = "1" ] && [ "$CLAUDE_DEAD" = "1" ]; then
+  rm -f /tmp/collab-agents-override.txt
+  fail 3 "BEIDE agents zijn dood. /collab kan niet draaien:
+     - Codex: usage limit hit (zie waarschuwing hierboven)
+     - Claude: not logged in in spawn-context
+     Fix: wacht tot codex-quota reset OF run 'claude /login' in een fresh terminal"
+elif [ "$CODEX_DEAD" = "1" ]; then
+  warn "Auto-fallback: claude-only (codex quota op)"
+  echo "claude" > /tmp/collab-agents-override.txt
+elif [ "$CLAUDE_DEAD" = "1" ]; then
+  warn "Auto-fallback: codex-only (claude niet ingelogd)"
+  echo "codex" > /tmp/collab-agents-override.txt
+else
+  rm -f /tmp/collab-agents-override.txt
 fi
-
-if echo "$CLAUDE_OUTPUT" | grep -qiE "not logged in|please run /login|authentication required"; then
-  fail 3 "Claude not logged in. Output: $CLAUDE_OUTPUT
-     Fix: claude  (interactive login)"
-fi
-
-if [ -z "$CLAUDE_OUTPUT" ] || [ "${#CLAUDE_OUTPUT}" -lt 2 ]; then
-  fail 3 "Claude returned empty output (likely auth issue or hung process)
-     Fix: claude  (interactive login or restart)"
-fi
-
-ok "Claude responded: ${CLAUDE_OUTPUT:0:60}"
 
 echo -e "  ${GRN}${BD}All preflight checks passed${R}"
 exit 0

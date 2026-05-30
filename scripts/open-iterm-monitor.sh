@@ -21,7 +21,9 @@ if ! osascript -e 'tell application "System Events" to (name of processes) conta
 fi
 
 REPO_DIR_Q=$(printf '%q' "$REPO_DIR")
-CMD="cd $REPO_DIR_Q && ./node_modules/.bin/tsx cli/monitor.ts ${TEAM_ID}"
+# Disable zsh CORRECT for this line: prevents "correct 'rcd' to 'cd'" prompt
+# wanneer race tussen write-text en shell-init een stray char prepend.
+CMD="unsetopt CORRECT 2>/dev/null; cd $REPO_DIR_Q && ./node_modules/.bin/tsx cli/monitor.ts ${TEAM_ID}"
 
 # iTerm2 sets ITERM_SESSION_ID like "w0t1p0:UUID" in every shell. Strip the
 # prefix so we can match session ids via AppleScript.
@@ -80,9 +82,12 @@ tell application "iTerm2"
     -- Wait for the spawned shell (zsh) to fully boot before writing.
     -- Without this, fast `write text` lands its first chars before the
     -- shell prompt is ready; zsh's `correct` plugin then mangles the
-    -- input (e.g. "cd ..." -> "dacd ...") and asks the user to confirm.
-    delay 0.6
+    -- input (e.g. "cd ..." -> "rcd ...") and asks the user to confirm.
+    -- 1.5s + leading empty line absorbs any stray race-character.
+    delay 1.5
     tell newSession
+      write text ""
+      delay 0.2
       write text "${CMD}"
     end tell
   end tell
@@ -110,8 +115,10 @@ tell application "iTerm2"
   end if
   tell first window
     set newTab to (create tab with default profile)
-    delay 0.6
+    delay 1.5
     tell current session of newTab
+      write text ""
+      delay 0.2
       write text "${CMD}"
     end tell
   end tell
@@ -124,8 +131,10 @@ tell application "iTerm2"
   activate
   delay 0.1
   set newWindow to (create window with default profile)
-  delay 0.6
+  delay 1.5
   tell current session of newWindow
+    write text ""
+    delay 0.2
     write text "${CMD}"
   end tell
 end tell

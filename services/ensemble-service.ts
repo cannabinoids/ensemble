@@ -583,21 +583,33 @@ export async function createEnsembleTeam(
     const ready = readyResults.filter(r => r.ready)
     const notReady = readyResults.filter(r => !r.ready)
 
+    // Best-effort readiness — Codex CLI in particular often misses the readyMarker
+    // while being functionally ready. Don't abort; warn and proceed with prompt
+    // injection for ALL agents whose tmux session exists. Their CLI will buffer
+    // the paste and process it when they reach the input prompt.
     for (const nr of notReady) {
+      console.warn(`[Ensemble] ${nr.sessionName} did not signal ready in time — attempting prompt injection anyway`)
       appendMessage(team.id, {
         id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
-        content: `❌ ${nr.agent.name} failed to start — timed out`,
+        content: `⚠ ${nr.agent.name} did not signal ready in time — injecting prompt anyway (best-effort)`,
         type: 'chat', timestamp: new Date().toISOString(),
       })
     }
 
-    if (ready.length < 2) {
+    // Use all agents for injection. Only abort if literally zero agents have a session.
+    const injectTargets = readyResults
+    if (injectTargets.length === 0) {
       appendMessage(team.id, {
         id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
-        content: `❌ Team start aborted: only ${ready.length}/${activeAgents.length} agents ready`,
+        content: `❌ Team start aborted: no agents available for prompt injection`,
         type: 'chat', timestamp: new Date().toISOString(),
       })
       return { data: { team }, status: 201 }
+    }
+    if (notReady.length > 0) {
+      // Give the non-ready agents a small extra grace window before pasting,
+      // so any in-progress trust prompts or async init can complete.
+      await new Promise(r => setTimeout(r, 3000))
     }
 
     await new Promise(r => setTimeout(r, 2000))
@@ -607,7 +619,7 @@ export async function createEnsembleTeam(
       // Staged mode: skip normal prompt injection, run plan→exec→verify workflow
       appendMessage(team.id, {
         id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
-        content: `🚀 All ${ready.length} agents ready — starting staged workflow (plan → exec → verify)`,
+        content: `🚀 ${injectTargets.length}/${activeAgents.length} agents — starting staged workflow (plan → exec → verify)`,
         type: 'chat', timestamp: new Date().toISOString(),
       })
 
@@ -649,9 +661,9 @@ export async function createEnsembleTeam(
       })
     } else {
       // Normal mode: inject prompts simultaneously
-      console.log(`[Ensemble] All ${ready.length} agents ready — injecting prompts simultaneously`)
+      console.log(`[Ensemble] Injecting prompts into ${injectTargets.length} agents (${ready.length} ready, ${notReady.length} best-effort)`)
       await Promise.all(
-        ready.map(async ({ agent, sessionName }) => {
+        injectTargets.map(async ({ agent, sessionName }) => {
           const promptFile = collabPromptFile(team.id, agent.name)
           try {
             if (agent.hostId && !isSelf(agent.hostId)) {
@@ -693,7 +705,7 @@ export async function createEnsembleTeam(
 
       appendMessage(team.id, {
         id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
-        content: `🚀 All ${ready.length} agents received their task — collaboration started`,
+        content: `🚀 ${injectTargets.length} agents received their task — collaboration started${notReady.length ? ` (${notReady.length} via best-effort fallback)` : ''}`,
         type: 'chat', timestamp: new Date().toISOString(),
       })
     }
