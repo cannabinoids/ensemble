@@ -262,8 +262,14 @@ if ! wants claude; then
   ok "Claude not in this run (agents: $REQUESTED_AGENTS) — skipping claude checks"
   CLAUDE_DEAD=0
 elif ! command -v claude > /dev/null 2>&1; then
-  warn "claude binary not in PATH — Claude-2 will be disabled, codex-only mode"
-  echo "codex" > /tmp/collab-agents-override.txt
+  # Mark it dead and let the decision block below choose, exactly like the codex
+  # and grok probes do. Deciding here used to write the codex-only override
+  # directly and leave CLAUDE_DEAD unset, so a run that NAMED claude passed
+  # preflight with no claude binary at all, and the override it wrote was thrown
+  # away by the explicit-agents branch anyway.
+  warn "claude binary not in PATH"
+  warn "  Fix: install the Claude Code CLI or check PATH"
+  CLAUDE_DEAD=1
 else
   CLAUDE_PROBE_SESS="collab-preflight-claude-$$"
   CLAUDE_PROBE_OUT="/tmp/collab-preflight-claude-$$.out"
@@ -328,7 +334,9 @@ elif [ "$CODEX_DEAD" = "1" ]; then
   warn "Auto-fallback: claude-only (codex quota op)"
   echo "claude" > /tmp/collab-agents-override.txt
 elif [ "$CLAUDE_DEAD" = "1" ]; then
-  warn "Auto-fallback: codex-only (claude niet ingelogd)"
+  # "niet beschikbaar", not "niet ingelogd": claude also counts as dead when the
+  # binary is missing entirely, and the old wording sent people to a login screen.
+  warn "Auto-fallback: codex-only (claude niet beschikbaar)"
   echo "codex" > /tmp/collab-agents-override.txt
 else
   rm -f /tmp/collab-agents-override.txt
