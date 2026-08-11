@@ -2,18 +2,18 @@
 
 **Multi-agent collaboration engine** — AI agents that work as one.
 
-Ensemble orchestrates AI agents into collaborative teams. Out of the box it pairs **Claude Code + Codex** — they communicate, share findings, and solve problems together in real time. On macOS + iTerm2 the live TUI monitor opens in a **native iTerm split pane** (no tmux needed); elsewhere, or when you're already inside tmux, it falls back to a tmux session. Agents themselves are orchestrated via the ensemble bridge — the monitor is just a viewer.
+Ensemble orchestrates AI agents into collaborative teams. Out of the box it pairs **Codex (lead) + Claude Code (worker)**. They communicate, share findings, and solve problems together in real time. Teams of three (adding Grok) work too. The live TUI monitor opens where you are already looking: a **herdr pane** inside a herdr workspace, a **native iTerm split pane** on macOS + iTerm2 (no tmux needed), or a tmux session elsewhere. Agents themselves are orchestrated via the ensemble bridge. The monitor is just a viewer.
 
 > **Status:** Experimental developer tool. macOS and Linux only.
 
 ## Features
 
-- **Team orchestration** — Spawn multi-agent teams with a single command
-- **Real-time messaging** — Agents communicate via a structured message bus
-- **TUI monitor** — Live viewer that opens in a native iTerm2 split pane on macOS (or tmux elsewhere)
-- **Auto-disband** — Intelligent completion detection ends teams when work is done
-- **Multi-host support** — Run agents across local and remote machines
-- **CLI & HTTP API** — Full control via command line or REST endpoints
+- **Team orchestration**: spawn multi-agent teams with a single command
+- **Real-time messaging**: agents communicate via a structured message bus
+- **TUI monitor**: live viewer that opens in a herdr pane, a native iTerm2 split pane on macOS, or tmux elsewhere
+- **Auto-disband**: completion detection ends teams when every agent has signalled done
+- **Multi-host support**: run agents across local and remote machines
+- **CLI & HTTP API**: full control via command line or REST endpoints
 
 **[Full documentation →](https://michelhelsdingen.github.io/ensemble/)**
 
@@ -93,31 +93,43 @@ This installs the skill, configures permissions, and verifies prerequisites. See
 
 ## Supported Agents
 
-The default team is **Claude Code (lead) + Codex (worker)**. This is the tested, production-ready combination.
+The default team is **Codex (lead) + Claude Code (worker)**. This is the tested, production-ready combination.
 
 | Agent | Status | How to use |
 |---|---|---|
-| **Claude Code + Codex** | Fully tested | Default — just run `/collab` or `collab-launch.sh` |
+| **Codex + Claude Code** | Fully tested | Default, just run `/collab` or `collab-launch.sh` |
+| **Grok CLI** | Tested in three-agent teams | Add explicitly (see below) |
 | **Gemini CLI** | Experimental | Add explicitly (see below) |
 | **Aider** | Untested | Add explicitly (see below) |
 | **Any CLI tool** | Via `agents.json` | [Add a custom agent](https://michelhelsdingen.github.io/ensemble/configuration#adding-a-custom-agent) |
 
 ### Using a different team composition
 
-Three ways to change which agents are on your team:
+Four ways to change which agents are on your team:
 
 **1. Name them in your `/collab` prompt:**
 ```
 /collab "Review the auth module with gemini and claude"
 ```
 
-**2. Use the `--agents` flag with `collab-launch.sh`:**
+**2. Pass them as the third argument to `collab-launch.sh`:**
 ```bash
-# First agent = lead, rest = workers
-./scripts/collab-launch.sh "$(pwd)" "Security audit" codex,claude,gemini
+# Comma-separated. First agent = lead, rest = workers.
+./scripts/collab-launch.sh "$(pwd)" "Security audit" codex,claude,grok
 ```
 
-**3. Specify agents in the API call:**
+**3. Set `COLLAB_AGENTS` once in your shell**, for a line-up you do not want to retype:
+```bash
+export COLLAB_AGENTS="codex,claude,grok"
+./scripts/collab-launch.sh "$(pwd)" "Security audit"   # runs all three
+```
+
+Precedence is: third argument > `COLLAB_AGENTS` > the default pair. Naming your agents, by
+argument *or* by env var, also turns off the auto-fallback: a dead agent then fails preflight
+loudly instead of being quietly swapped for a working one. That is deliberate. If you asked for
+three agents you want to hear that one of them is broken, not get two and no explanation.
+
+**4. Specify agents in the API call:**
 ```bash
 curl -X POST http://localhost:23000/api/ensemble/teams \
   -H "Content-Type: application/json" \
@@ -137,11 +149,11 @@ curl -X POST http://localhost:23000/api/ensemble/teams \
 
 ## How It Works
 
-1. **Create a team** — Define agents and their task via API or CLI
-2. **Agents spawn** — Each agent is started by the ensemble bridge with the task prompt
-3. **Communication** — Agents use `team-say`/`team-read` scripts to exchange messages
-4. **Monitor** — Watch the collaboration unfold in real-time via the TUI monitor (iTerm split pane on macOS, tmux elsewhere)
-5. **Auto-disband** — When agents signal completion, results are summarized and persisted
+1. **Create a team**: define agents and their task via API or CLI
+2. **Agents spawn**: each agent is started by the ensemble bridge with the task prompt
+3. **Communication**: agents use `team-say`/`team-read` scripts to exchange messages
+4. **Monitor**: watch the collaboration unfold in real time via the TUI monitor (herdr pane, iTerm split pane on macOS, or tmux)
+5. **Auto-disband**: when every agent signals completion, results are summarized and persisted
 
 ### Monitor selection
 
@@ -149,16 +161,24 @@ curl -X POST http://localhost:23000/api/ensemble/teams \
 
 | Situation | Monitor |
 |---|---|
+| Inside a [herdr](https://github.com/herdrdev/herdr) workspace | **herdr pane** (checked first) |
 | Already inside tmux | tmux split pane (right) |
-| macOS + iTerm2, no tmux | **native iTerm2 split pane** (default) |
+| macOS + iTerm2, no tmux | **native iTerm2 split pane** |
 | Linux, or no iTerm2 | detached tmux session (`tmux attach -t ensemble-<id>`) |
+
+herdr is checked before iTerm2 on purpose: herdr draws its own panes inside a host iTerm
+session but passes `TERM_PROGRAM=iTerm.app` through unchanged. Trusting that would open a real
+iTerm split *outside* the layout you are looking at, so the monitor would never be seen.
+`HERDR_ENV=1` is the reliable signal. The pane is labelled after your project directory and
+closes itself when the team disbands.
 
 Override with env vars:
 
-- `COLLAB_MONITOR=tmux\|iterm\|none` — force a specific mode (or disable the monitor)
-- `COLLAB_ITERM_MODE=split\|tab\|window` — iTerm layout (default `split`)
+- `COLLAB_MONITOR=herdr\|tmux\|iterm\|none`: force a specific mode (or disable the monitor)
+- `COLLAB_ITERM_MODE=split\|tab\|window`: iTerm layout (default `split`)
+- `COLLAB_HERDR_MODE=split\|tab`: herdr layout (default `split`)
 
-On macOS, iTerm2 is the default — you never need `tmux attach` for the monitor.
+On macOS, you never need `tmux attach` for the monitor.
 
 ## Configuration
 

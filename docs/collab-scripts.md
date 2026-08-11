@@ -16,7 +16,7 @@ All scripts live in `scripts/` and use `collab-paths.sh` for consistent path res
 **All-in-one team launcher.** Creates team, starts bridge, opens monitor.
 
 ```bash
-./scripts/collab-launch.sh <working-directory> <task-description> [agents]
+./scripts/collab-launch.sh <working-directory> <task-description> [agents] [template]
 ```
 
 Examples:
@@ -24,29 +24,50 @@ Examples:
 # Default: codex (lead) + claude (worker)
 ./scripts/collab-launch.sh ~/myproject "Review all API endpoints for security issues"
 
-# Custom agents: specify comma-separated list (first = lead)
-./scripts/collab-launch.sh ~/myproject "Security audit" codex,claude,gemini
+# Custom agents: comma-separated list (first = lead)
+./scripts/collab-launch.sh ~/myproject "Security audit" codex,claude,grok
+
+# With a role template from collab-templates.json
+./scripts/collab-launch.sh ~/myproject "Security audit" codex,claude review
 ```
+
+Both optional arguments have an env-var equivalent, so a line-up or template you always want
+does not have to be retyped:
+
+| Argument | Env var | Precedence |
+|---|---|---|
+| 3rd (`agents`) | `COLLAB_AGENTS` | argument > env var > default pair |
+| 4th (`template`) | `COLLAB_TEMPLATE` | argument > env var > generic lead/worker roles |
+
+Naming agents, by argument or by `COLLAB_AGENTS`, also disables the auto-fallback that
+preflight uses to swap out a dead agent. A named agent that is broken becomes a hard preflight
+failure instead of a silent substitution.
 
 What it does:
 1. Starts the ensemble server (if not running)
-2. Creates a team via API
-3. Starts the ensemble bridge
-4. Opens the TUI monitor — picks the best viewer automatically (see table below)
-5. Starts a background message poller
-6. Waits for agents to begin communicating
+2. Runs `collab-preflight.sh` for exactly the agents this run needs
+3. Creates a team via API
+4. Starts the ensemble bridge
+5. Opens the TUI monitor, picking the best viewer automatically (see table below)
+6. Starts a background message poller
+7. Waits for agents to begin communicating
 
-**Monitor selection** (override with `COLLAB_MONITOR=tmux|iterm|none`):
+**Monitor selection** (override with `COLLAB_MONITOR=herdr|tmux|iterm|none`):
 
 | Situation | Monitor opened |
 |---|---|
+| Inside a herdr workspace (`HERDR_ENV=1`) | herdr pane, labelled after the project directory |
 | Inside tmux already | tmux split pane (right 40%) |
-| macOS + iTerm2, not in tmux | native iTerm2 split pane (default) |
+| macOS + iTerm2, not in tmux | native iTerm2 split pane |
 | Linux, or no iTerm2 | detached tmux session (`tmux attach -t ensemble-<id>`) |
 
-On macOS you can change the iTerm layout with `COLLAB_ITERM_MODE=split|tab|window` (default `split`).
+herdr is checked before iTerm2: it passes `TERM_PROGRAM=iTerm.app` through unchanged, so
+trusting that variable opens a real iTerm split outside the layout you are watching.
 
-Output (macOS iTerm2 example):
+Layout overrides: `COLLAB_ITERM_MODE=split|tab|window` and `COLLAB_HERDR_MODE=split|tab`
+(both default to `split`).
+
+Output (herdr example, three agents):
 ```
 ◈ ensemble collab
   Review all API endpoints for security issues
@@ -54,11 +75,41 @@ Output (macOS iTerm2 example):
   ✓ Server running
   ✓ Team created (collab-1774001029143-7384)
   ✓ Bridge started
-  ✓ Monitor opened (iTerm split)
+  ✓ Monitor opened (herdr split)
   ✓ Agents communicating (2 messages)
 
-  Team is live! codex-1 + claude-2 are collaborating.
+  Team is live! codex-1 + claude-2 + grok-3 are collaborating.
 ```
+
+The last line of stdout is a machine-readable `TEAM_ID=<id>` trailer. Grep for that instead of
+reading `/tmp/collab-team-id.txt`, which is global and gets overwritten when two collabs run at
+the same time.
+
+---
+
+## collab-preflight.sh
+
+**Verifies the agents can actually work before a team is spawned.** Run automatically by
+`collab-launch.sh`; skip with `COLLAB_SKIP_PREFLIGHT=1`.
+
+```bash
+./scripts/collab-preflight.sh [agents-csv]
+```
+
+Only the CLIs you name are checked, so a codex quota wall does not block a `grok,claude` run.
+The codex check is a real `codex exec` that must return a sentinel string: an auth mode that
+rejects the configured model answers with an ordinary error containing no quota wording, and
+used to be reported as healthy right before the agent spawned and sat silent all session.
+
+| Exit | Meaning |
+|---|---|
+| 0 | Safe to launch |
+| 1 | Ensemble service not running |
+| 2 | Service is stale (started without auth, restart it) |
+| 3 | Claude CLI broken, or a *named* agent is unavailable |
+| 4 | Codex CLI broken |
+| 5 | DNS/network issue |
+| 6 | Grok CLI broken |
 
 ---
 
@@ -145,11 +196,15 @@ Shows: team name, status (active/finished/stale), message count, last message, d
 
 ## collab-cleanup.sh
 
-**Remove finished team runtime directories** from `/tmp/ensemble/`.
+**Remove finished team runtime directories** from `/tmp/ensemble/`. Dry-run by default.
 
 ```bash
-./scripts/collab-cleanup.sh
+./scripts/collab-cleanup.sh           # list what would be deleted
+./scripts/collab-cleanup.sh --force   # actually delete
 ```
+
+This does not disband a running team. To end one, press `d` in the monitor or
+`POST /api/ensemble/teams/<id>/disband`.
 
 ---
 

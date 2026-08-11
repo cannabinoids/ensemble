@@ -11,7 +11,7 @@ Ensemble orchestrates AI agents into collaborative teams. Out of the box it pair
 
 > **Status:** Experimental developer tool. Not a production framework (yet).
 >
-> **Default team:** Claude Code (lead) + Codex (worker). You can [add other agents](configuration#supported-agents) like Gemini (experimental) or any custom CLI tool.
+> **Default team:** Codex (lead) + Claude Code (worker). You can [add other agents](configuration#supported-agents) like Grok, Gemini (experimental) or any custom CLI tool, and run teams of three.
 
 ---
 

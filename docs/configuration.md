@@ -41,7 +41,7 @@ The `agents.json` file defines which AI agents ensemble can spawn. Located in th
   "codex": {
     "name": "codex",
     "command": "codex",
-    "flags": ["--full-auto"],
+    "flags": ["--dangerously-bypass-approvals-and-sandbox"],
     "readyMarker": "›",
     "inputMethod": "pasteFromFile",
     "color": "blue",
@@ -50,16 +50,27 @@ The `agents.json` file defines which AI agents ensemble can spawn. Located in th
   "claude": {
     "name": "claude",
     "command": "claude",
-    "flags": ["--dangerously-skip-permissions"],
+    "flags": ["--permission-mode", "auto"],
     "readyMarker": "❯",
     "inputMethod": "sendKeys",
     "color": "green",
     "icon": "●"
+  },
+  "grok": {
+    "name": "grok",
+    "command": "grok",
+    "flags": ["--always-approve", "--trust"],
+    "readyMarker": "❯",
+    "inputMethod": "pasteFromFile",
+    "color": "white",
+    "icon": "✕"
   }
 }
 ```
 
-> **Model selection:** By default, each agent uses its own default model. To specify a model, add it to the `flags` array — e.g., `["--full-auto", "-m", "o3"]` for Codex or `["--dangerously-skip-permissions", "--model", "sonnet"]` for Claude. Check each agent's docs for available models.
+> **Model selection:** By default, each agent uses its own default model. To specify a model, add it to the `flags` array, e.g. `["--dangerously-bypass-approvals-and-sandbox", "-m", "o3"]` for Codex or `["--permission-mode", "auto", "--model", "sonnet"]` for Claude. Check each agent's docs for available models.
+>
+> **Codex users:** `--full-auto` was removed in Codex CLI 0.147.0. If you copied it from an older config, `codex exec` now exits with `unexpected argument '--full-auto' found`. Use `--sandbox workspace-write` for a sandboxed run, or the bypass flag above for the unattended one ensemble ships with.
 ```
 
 ### Fields
@@ -96,12 +107,13 @@ The agent must support `team-say` and `team-read` shell commands in its PATH for
 
 ### Supported agents
 
-The default team is **Claude Code (lead) + Codex (worker)**. This is the fully tested combination.
+The default team is **Codex (lead) + Claude Code (worker)**. This is the fully tested combination.
 
 | Agent | Status | Default? | Notes |
 |---|---|---|---|
+| **Codex** | Fully tested | Yes (lead) | Uses `pasteFromFile` input, `--dangerously-bypass-approvals-and-sandbox` flag |
 | **Claude Code** | Fully tested | Yes (worker) | Uses `sendKeys` input |
-| **Codex** | Fully tested | Yes (lead) | Uses `pasteFromFile` input, `--full-auto` flag |
+| **Grok CLI** | Tested in three-agent teams | No | Uses `pasteFromFile`, `--always-approve --trust`. Needs `hints = { project_picker_disabled = true }` in `~/.grok/config.toml`, otherwise the agent hangs on a directory picker in a fresh pane. |
 | **Gemini CLI** | Experimental | No | Uses `pasteFromFile`, `--yolo` flag. May stop responding due to free-tier rate limits or internal TUI issues. Use a paid API key (`gemini /auth`) for best results. |
 | **Aider** | Untested | No | Basic config included in `agents.json` |
 | **Any CLI tool** | Custom | No | See [Adding a custom agent](#adding-a-custom-agent) |
@@ -304,8 +316,9 @@ Ensemble agents run autonomously inside `tmux` sessions without a human at the t
 
 | Flag | Agent | Purpose |
 |---|---|---|
-| `--dangerously-skip-permissions` | Claude Code | Allows tool execution, file edits, and shell commands without interactive permission prompts. |
-| `--full-auto` | Codex | Enables fully autonomous execution without confirmation prompts. |
+| `--permission-mode auto` | Claude Code | Allows tool execution, file edits, and shell commands without interactive permission prompts. |
+| `--dangerously-bypass-approvals-and-sandbox` | Codex | Runs without approval prompts or sandbox. Replaces the `--full-auto` flag that Codex CLI removed in 0.147.0; the sandboxed equivalent is `--sandbox workspace-write`. |
+| `--always-approve --trust` | Grok CLI | Skips per-action approval and the folder-trust dialog. |
 
 These flags are acceptable in the ensemble context because:
 

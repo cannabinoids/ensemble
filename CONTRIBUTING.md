@@ -15,8 +15,23 @@ Thanks for your interest in contributing! Ensemble is an experimental multi-agen
 ```bash
 npm run dev       # Start server with hot reload (tsx)
 npm run build     # Type check (tsc --noEmit)
+npx vitest run    # Run the test suite
 npm run monitor   # Launch TUI monitor
 ```
+
+### Editing the Claude Code skill
+
+`skill/SKILL.md` is the source of truth. The installed copy at
+`~/.claude/skills/collab/SKILL.md` is generated from it by `scripts/setup-claude-code.sh`, which
+substitutes `__ENSEMBLE_DIR__` for your repo path. That substitution is why the installed copy
+must never be edited directly, and why the installer has to be re-run after every skill change:
+
+```bash
+./scripts/setup-claude-code.sh   # re-install after editing skill/SKILL.md
+```
+
+Skip it and your session keeps running the old skill while the repo says otherwise, which is
+exactly how the two files drifted apart before.
 
 ### Prerequisites
 
