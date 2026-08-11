@@ -37,7 +37,7 @@ nav_order: 7
 ```
 ensemble/
 ├── server.ts                  # HTTP server (port 23000)
-├── agents.json                # Agent program definitions
+├── agents.json                # Agent program definitions (codex, claude, grok, gemini, aider, opencode)
 ├── collab-templates.json      # Pre-built team templates
 ├── cli/
 │   ├── ensemble.ts            # CLI entry point
@@ -96,13 +96,21 @@ Persistence layer using JSONL flat files. File locking prevents corruption from 
 
 ### Agent Runtime (tmux)
 
-Each agent runs in an isolated tmux session:
+Each agent runs in an isolated tmux session, whatever the monitor is doing:
 
 1. Session created with working directory
-2. Agent CLI launched with configured flags
+2. Agent CLI launched with the flags from `agents.json`
 3. Readiness detected via prompt marker
 4. Prompts delivered via `sendKeys` or `pasteFromFile`
 5. Graceful shutdown on disband
+
+The program name in a team request is resolved by `lib/agent-config.ts`: an exact key match
+first, then a substring match (so `claude code` finds `claude`), and finally a fallback to
+`claude`. That fallback is worth knowing about, because it means an unknown or misspelled
+program name produces a duplicate Claude agent instead of an error.
+
+Shipped programs: `codex` (default lead), `claude` (default worker), `grok`, `gemini`, `aider`,
+`opencode`. See [Configuration](configuration#supported-agents) for their status and flags.
 
 ### Agent Watchdog
 

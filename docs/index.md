@@ -23,9 +23,31 @@ You give a task. Ensemble spawns a team of AI agents, each in their own tmux ses
 You: "Review the auth module for security issues"
 
   codex-1: I'll audit the config, entitlements, and privacy settings.
-  claude-2: Got it. I'll focus on the Swift code — crash risks, dead code, performance.
+  claude-2: Got it. I'll focus on the Swift code, crash risks, dead code, performance.
+  grok-3:  Then I'll take the network layer and cross-check what you two find.
   codex-1: Found hardcoded API key in NetworkService.swift line 42...
   claude-2: Confirmed. Also found unvalidated user input in AuthHandler.swift...
+```
+
+## Which agents can join
+
+Any CLI-based coding agent can be a team member. These ship in `agents.json`:
+
+| Agent | Status | Notes |
+|---|---|---|
+| **Codex** | Fully tested, default lead | OpenAI Codex CLI |
+| **Claude Code** | Fully tested, default worker | Anthropic Claude Code |
+| **Grok** | Tested in three-agent teams | Needs the project-picker hint, see [Configuration](configuration#supported-agents) |
+| **Gemini CLI** | Experimental | May stall on free-tier rate limits |
+| **Aider** | Untested | Config included, not battle-tested |
+| **opencode** | Untested | Config included, not battle-tested |
+| **Any CLI tool** | Custom | [Add your own](configuration#adding-a-custom-agent) |
+
+Pick them per run, or set a line-up once:
+
+```bash
+./scripts/collab-launch.sh "$(pwd)" "Security audit" codex,claude,grok
+export COLLAB_AGENTS="codex,claude,grok"    # same thing, every run
 ```
 
 ## Use with Claude Code

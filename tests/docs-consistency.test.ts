@@ -73,6 +73,23 @@ describe('docs match agents.json', () => {
     }
   })
 
+  it('mentions every shipped agent where a reader would look for it', () => {
+    // The other direction of the check below: an agent can also exist in agents.json and be
+    // documented nowhere. Grok shipped that way and was invisible on the docs site, which is
+    // indistinguishable from not supporting it.
+    const pages = {
+      'docs/configuration.md': 'the agent reference page',
+      'docs/index.md': 'the landing page, where people decide whether this does what they need',
+    }
+    for (const [rel, why] of Object.entries(pages)) {
+      const text = read(rel).toLowerCase()
+      for (const key of Object.keys(agents)) {
+        expect(text, `${rel} (${why}) never mentions the "${key}" agent from agents.json`)
+          .toContain(key)
+      }
+    }
+  })
+
   it('only advertises agent keys that exist in agents.json', () => {
     // An unknown key is not an error at runtime: resolveAgentProgram() falls back to claude,
     // so a key that only exists in the docs silently spawns a duplicate agent.

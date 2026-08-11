@@ -116,6 +116,7 @@ The default team is **Codex (lead) + Claude Code (worker)**. This is the fully t
 | **Grok CLI** | Tested in three-agent teams | No | Uses `pasteFromFile`, `--always-approve --trust`. Needs `hints = { project_picker_disabled = true }` in `~/.grok/config.toml`, otherwise the agent hangs on a directory picker in a fresh pane. |
 | **Gemini CLI** | Experimental | No | Uses `pasteFromFile`, `--yolo` flag. May stop responding due to free-tier rate limits or internal TUI issues. Use a paid API key (`gemini /auth`) for best results. |
 | **Aider** | Untested | No | Basic config included in `agents.json` |
+| **opencode** | Untested | No | Basic config included in `agents.json`, `sendKeys` input |
 | **Any CLI tool** | Custom | No | See [Adding a custom agent](#adding-a-custom-agent) |
 
 #### How to use a non-default agent

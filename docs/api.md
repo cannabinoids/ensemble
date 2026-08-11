@@ -50,7 +50,11 @@ curl -X POST http://localhost:23000/api/ensemble/teams \
 **Required fields:**
 - `name` (string) — team name
 - `description` (string) — task for the team
-- `agents` (array) — at least one agent with `program` field
+- `agents` (array) — at least one agent with a `program` field. Valid values are the keys in
+  [`agents.json`](configuration#agent-programs-agentsjson): `codex`, `claude`, `grok`, `gemini`,
+  `aider`, `opencode`, plus any you add yourself. Note that an unrecognised value is **not**
+  rejected: the resolver falls back to `claude`, so a typo silently gives you an extra Claude
+  agent rather than an error. The first agent in the array is normally given the `lead` role.
 
 **Optional fields:**
 - `workingDirectory` (string) — project path for agents
