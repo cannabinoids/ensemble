@@ -25,3 +25,38 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+  test:
+    # A clean runner is the point: it has none of a maintainer's local setup, no agent CLIs and
+    # no logged-in accounts, so it is the closest free stand-in for someone who just cloned the
+    # repo. Tests that only pass on the machine they were written on fail here instead.
+    name: Tests (clean machine)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - run: npm ci
+
+      - name: Report environment
+        run: |
+          echo "node $(node --version)"
+          echo "tmux $(tmux -V)"
+          echo "python $(python3 --version)"
+          for cli in claude codex grok aider gemini; do
+            if command -v "$cli" > /dev/null 2>&1; then
+              echo "$cli: present (unexpected on a clean runner)"
+            else
+              echo "$cli: absent, as a fresh clone would be"
+            fi
+          done
+
+      - name: Test suite
+        run: npx vitest run --reporter=verbose
