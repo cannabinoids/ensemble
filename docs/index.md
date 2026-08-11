@@ -7,7 +7,7 @@ nav_order: 1
 
 **Multi-agent collaboration engine** — AI agents that work as one.
 
-Ensemble orchestrates AI agents into collaborative teams. Out of the box it pairs **Claude Code + Codex** — they communicate, share findings, and solve problems together in real time.
+Ensemble orchestrates AI agents into collaborative teams. Out of the box it pairs **Codex (lead) + Claude Code (worker)**, and they communicate, share findings, and solve problems together in real time. Teams of three (adding Grok) work too.
 
 > **Status:** Experimental developer tool. Not a production framework (yet).
 >

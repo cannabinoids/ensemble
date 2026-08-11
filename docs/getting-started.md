@@ -10,22 +10,35 @@ nav_order: 2
 | Requirement | Why |
 |---|---|
 | **Node.js 18+** | Runtime for the ensemble server |
-| **tmux** | Required on Linux for the live TUI monitor; optional on macOS (iTerm2 is used instead — see below) |
+| **tmux** | Always used to run the agents themselves. Also the live TUI monitor on Linux; on macOS the monitor uses an iTerm2 or herdr pane instead (see below) |
 | **Python 3.6+** | Used by collab scripts for message parsing |
 | **curl** | Used in scripts and examples |
 | **macOS or Linux** | Shell scripts require a Unix environment |
-| **Claude Code + Codex CLIs** | The default agent pair ([Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex)) |
+| **Codex + Claude Code CLIs** | The default agent pair, codex as lead ([Codex](https://github.com/openai/codex), [Claude Code](https://docs.anthropic.com/en/docs/claude-code)) |
 
 > **Platform support:** Ensemble runs on macOS and Linux only. Windows (including WSL) is not tested or supported.
 
-### Monitor: iTerm2 on macOS, tmux on Linux
+### Monitor: where the live view opens
 
-The live TUI monitor is just a viewer — on macOS it opens in a **native iTerm2 split pane** via `osascript`, so you never need to `tmux attach`. On Linux, or when no iTerm2 is present, it falls back to a tmux session. Override with `COLLAB_MONITOR=tmux|iterm|none` or `COLLAB_ITERM_MODE=split|tab|window`.
+The live TUI monitor is just a viewer, and it opens wherever you already are:
 
-### Install tmux (Linux, or macOS fallback)
+| Situation | Monitor |
+|---|---|
+| Inside a [herdr](https://github.com/herdrdev/herdr) workspace | herdr pane (checked first) |
+| Already inside tmux | tmux split pane |
+| macOS + iTerm2, not in tmux | native iTerm2 split pane via `osascript` |
+| Linux, or no iTerm2 | detached tmux session (`tmux attach -t ensemble-<team-id>`) |
+
+On Linux you get the tmux path, which is the one to expect if you are following this guide on a
+server. Override with `COLLAB_MONITOR=herdr|tmux|iterm|none`, and change the layout with
+`COLLAB_ITERM_MODE=split|tab|window` or `COLLAB_HERDR_MODE=split|tab`.
+
+### Install tmux
+
+Required on every platform: agents always run inside tmux sessions, even when the monitor does not.
 
 ```bash
-# macOS (optional — only if you prefer tmux over iTerm2 native splits)
+# macOS
 brew install tmux
 
 # Ubuntu/Debian
@@ -37,7 +50,7 @@ tmux -V
 
 ### Install AI agent CLIs
 
-You need **both Claude Code and Codex** installed (the default team):
+You need **both Codex and Claude Code** installed (the default team, codex leads):
 
 ```bash
 # Claude Code (Anthropic)
@@ -47,14 +60,15 @@ npm install -g @anthropic-ai/claude-code
 npm install -g @openai/codex
 ```
 
-> **Want to use other agents?** Ensemble is agent-agnostic — you can add Gemini CLI (experimental), Aider, or any CLI tool via `agents.json`. See [Configuration → Supported Agents](configuration#supported-agents) for details.
+> **Want to use other agents?** Ensemble is agent-agnostic. You can add Grok, Gemini CLI (experimental), Aider, or any CLI tool via `agents.json`, and run teams of three. See [Configuration → Supported Agents](configuration#supported-agents) for details.
 
 Each agent CLI manages its own API keys. Make sure they're configured before running ensemble:
 
 | Agent | Auth setup | Where to get a key |
 |---|---|---|
 | **Claude Code** | Run `claude auth login` (opens browser) or set `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com/) |
-| **Codex** | Set `OPENAI_API_KEY` in your shell profile | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| **Codex** | Run `codex login` (ChatGPT account) or set `OPENAI_API_KEY` | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| **Grok** (optional) | Run `grok login`, then add `hints = { project_picker_disabled = true }` to `~/.grok/config.toml` | [x.ai](https://x.ai/) |
 
 ```bash
 # Example: add to your ~/.zshrc or ~/.bashrc
@@ -62,7 +76,7 @@ export OPENAI_API_KEY="sk-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
-> **Cost note:** Each agent uses its own API credits. A typical collab session (two agents, ~10 minutes) costs roughly $0.10–$0.50 depending on task complexity and models used.
+> **Cost note:** Each agent uses its own API credits, so a third agent is roughly a third more. A typical two-agent session of ~10 minutes costs roughly $0.10 to $0.50 depending on task complexity and models used.
 
 > **Tip:** Test that your agent CLI works standalone before using it with ensemble. Run `claude --version` or `codex --version` to verify installation, then try a simple prompt to confirm your API key works.
 
@@ -145,11 +159,11 @@ If you use Claude Code, the collab script wraps everything into one command:
 ./scripts/collab-launch.sh "$(pwd)" "Review the README and suggest improvements"
 ```
 
-This creates a team, starts the bridge, opens a TUI monitor, and begins the collaboration automatically. On macOS + iTerm2 the monitor pops up in a **new iTerm split pane** automatically — you don't need to attach to anything.
+This creates a team, runs preflight, starts the bridge, opens a TUI monitor, and begins the collaboration automatically. On macOS the monitor pops up in a new iTerm2 or herdr pane, so you do not need to attach to anything. On Linux it starts a detached tmux session and prints the attach command.
 
 ### Watch it live
 
-On macOS the monitor is already visible in the iTerm split pane that `collab-launch` opened. If you need to (re)open it manually:
+On macOS the monitor is already visible in the pane that `collab-launch` opened. On Linux, attach to the tmux session it printed. To (re)open it manually:
 
 ```bash
 # Open the TUI monitor (replace <team-id> with your actual team ID)
@@ -158,7 +172,7 @@ npx ensemble monitor <team-id>
 # Or monitor the most recent team
 npx ensemble monitor --latest
 
-# Linux / tmux fallback — attach to the detached session
+# Linux / tmux fallback: attach to the detached session
 tmux attach -t ensemble-<team-id>
 ```
 
@@ -167,7 +181,7 @@ tmux attach -t ensemble-<team-id>
 | Key | Action |
 |---|---|
 | `s` | Steer entire team (send a message) |
-| `1`/`2` | Steer specific agent by number |
+| `1`-`4` | Steer specific agent by number |
 | `j`/`k` | Scroll message history |
 | `d` | Disband team (stop and summarize) |
 | `q` | Quit monitor |
@@ -191,13 +205,13 @@ curl -X DELETE http://localhost:23000/api/ensemble/teams/<team-id>
 
 ## What happens under the hood
 
-1. **Server receives team request** — validates agents, creates team record
-2. **Agents spawn** — each gets its own tmux session with the task prompt
-3. **Communication** — agents use `team-say`/`team-read` scripts to exchange messages
-4. **Bridge** — the ensemble-bridge polls for new messages and delivers them between agents
-5. **Monitor** — TUI shows the conversation in real time
-6. **Auto-disband** — when agents signal completion, the team wraps up automatically
-7. **Summary** — results are persisted and optionally sent via Telegram
+1. **Server receives team request**: validates agents, creates team record
+2. **Agents spawn**: each gets its own tmux session with the task prompt
+3. **Communication**: agents use `team-say`/`team-read` scripts to exchange messages
+4. **Bridge**: the ensemble-bridge polls for new messages and delivers them between agents
+5. **Monitor**: TUI shows the conversation in real time
+6. **Auto-disband**: when every agent has sent the completion sentinel, the team wraps up automatically
+7. **Summary**: results are persisted and optionally sent via Telegram
 
 ---
 
@@ -207,15 +221,15 @@ curl -X DELETE http://localhost:23000/api/ensemble/teams/<team-id>
 |---|---|
 | "Connection refused" on curl | Make sure `npm run dev` is running in another terminal |
 | "Port 23000 already in use" | Another ensemble server is running. Stop it or use a different port via `ENSEMBLE_PORT` |
-| Agent doesn't respond | Check that the agent CLI is installed and API keys are set |
+| Agent doesn't respond | Run `./scripts/collab-preflight.sh` on its own. It probes each CLI you name and prints the exact failure and fix |
 | "command not found: tmux" | Install tmux (see prerequisites above) |
 
 ---
 
 ## Next steps
 
-- [Configuration](configuration) — customize agents, ports, hosts, Telegram notifications
-- [API Reference](api) — all HTTP endpoints with examples
-- [CLI Reference](cli) — command line usage and monitor keybindings
-- [Collab Scripts](collab-scripts) — shell scripts for Claude Code integration
-- [Architecture](architecture) — how it all fits together
+- [Configuration](configuration): customize agents, ports, hosts, Telegram notifications
+- [API Reference](api): all HTTP endpoints with examples
+- [CLI Reference](cli): command line usage and monitor keybindings
+- [Collab Scripts](collab-scripts): shell scripts for Claude Code integration
+- [Architecture](architecture): how it all fits together
