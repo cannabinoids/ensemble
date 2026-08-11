@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Strip session-transcript links from commit messages.
+#
+# Some AI coding harnesses append a `Claude-Session:` trailer pointing at the session that
+# produced the commit. The transcript itself sits behind a login, but the repository is public
+# and the link is of no use to anyone reading the history, so it does not belong here. This
+# repo's history had to be rewritten once to remove ten of them; the hook is cheaper.
+set -euo pipefail
+
+MSG_FILE="$1"
+if grep -q '^Claude-Session:' "$MSG_FILE"; then
+  grep -v '^Claude-Session:' "$MSG_FILE" > "$MSG_FILE.tmp"
+  mv "$MSG_FILE.tmp" "$MSG_FILE"
+  echo "commit-msg hook: removed a Claude-Session trailer (public repo)" >&2
+fi
