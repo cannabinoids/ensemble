@@ -67,13 +67,29 @@ fi
 ok "Ensemble service responding"
 
 # ─── 2. Service age (stale state catches the 2026-05-08 issue) ───
-SERVER_PID=$(pgrep -f "tsx server.ts" | head -1)
+# This whole block used to be a no-op on Linux, which is the opposite of harmless: it is the
+# check that catches a service started in a shell without credentials, the cause of several
+# silent all-agents-dead sessions. Two macOS assumptions hid it. `pgrep` is not installed on a
+# minimal image (procps), and `date -j -f` is BSD-only, so on GNU date the substitution came
+# back empty and the age comparison was skipped without a word.
+if command -v pgrep > /dev/null 2>&1; then
+  SERVER_PID=$(pgrep -f "tsx server.ts" | head -1)
+else
+  SERVER_PID=$(ps -eo pid=,args= 2>/dev/null | awk '/tsx server\.ts/ && !/awk/ {print $1; exit}')
+fi
 if [ -n "$SERVER_PID" ]; then
-  # Get process start time in seconds (macOS-compatible)
-  PROC_START_EPOCH=$(ps -p "$SERVER_PID" -o lstart= 2>/dev/null | xargs -I{} date -j -f "%a %b %d %T %Y" "{}" +%s 2>/dev/null)
-  if [ -n "$PROC_START_EPOCH" ]; then
-    NOW=$(date +%s)
-    AGE_SECS=$((NOW - PROC_START_EPOCH))
+  # GNU ps reports elapsed seconds directly; BSD/macOS ps does not, so fall back to parsing the
+  # start time there. Trying etimes first keeps Linux on the simpler path.
+  AGE_SECS=$(ps -p "$SERVER_PID" -o etimes= 2>/dev/null | tr -d ' ')
+  if ! printf '%s' "${AGE_SECS:-}" | grep -qE '^[0-9]+$'; then
+    PROC_START_EPOCH=$(ps -p "$SERVER_PID" -o lstart= 2>/dev/null | xargs -I{} date -j -f "%a %b %d %T %Y" "{}" +%s 2>/dev/null)
+    if [ -n "$PROC_START_EPOCH" ]; then
+      AGE_SECS=$(( $(date +%s) - PROC_START_EPOCH ))
+    else
+      AGE_SECS=""
+    fi
+  fi
+  if [ -n "$AGE_SECS" ]; then
     AGE_HRS=$((AGE_SECS / 3600))
     if [ "$AGE_HRS" -gt "$SERVICE_MAX_AGE_HOURS" ]; then
       fail 2 "Ensemble service is ${AGE_HRS}h old (>${SERVICE_MAX_AGE_HOURS}h threshold)
@@ -81,13 +97,29 @@ if [ -n "$SERVER_PID" ]; then
      Fix: pkill -f 'tsx server.ts' && cd ~/Documents/ensemble && nohup ./node_modules/.bin/tsx server.ts > /tmp/ensemble-server.log 2>&1 &"
     fi
     ok "Ensemble service age: ${AGE_HRS}h (within ${SERVICE_MAX_AGE_HOURS}h limit)"
+  else
+    warn "Could not determine service age (no usable ps) — stale-service check skipped"
   fi
+else
+  warn "Could not find the server process — stale-service check skipped"
 fi
 
 # ─── 3. DNS reachability ───
-for host in api.openai.com api.anthropic.com; do
-  if ! host "$host" > /dev/null 2>&1; then
-    fail 5 "DNS lookup failed for $host
+# Resolve through python3, which every collab script already depends on, instead of `host`.
+# `host` ships in bind9-host and is absent from a minimal Linux install; because the old check
+# only asked whether the command succeeded, a missing binary was reported as "DNS lookup
+# failed ... check internet connection / VPN / DNS resolver". That sends someone debugging a
+# network that works. getaddrinfo also goes through the same resolver the agent CLIs use, so
+# it tests the thing we actually care about.
+resolves() {
+  python3 - "$1" <<'PY' > /dev/null 2>&1
+import socket, sys
+socket.getaddrinfo(sys.argv[1], 443)
+PY
+}
+for HOSTNAME in api.openai.com api.anthropic.com; do
+  if ! resolves "$HOSTNAME"; then
+    fail 5 "DNS lookup failed for $HOSTNAME
      Fix: check internet connection / VPN / DNS resolver"
   fi
 done
@@ -96,26 +128,31 @@ ok "DNS resolves api.openai.com + api.anthropic.com"
 # ─── 3b. TMUX DNS-staleness check (regression 2026-05-13) ───
 # Het tmux-server proces cached zijn eigen libc-resolver. Na uren draaien valt
 # getaddrinfo() in tmux-spawned children silent uit ("Unknown host") terwijl
-# `host` op shell-niveau het wel doet. Resultaat: codex/claude in tmux krijgen
-# stream-disconnects bij elke api-call. Detecteer door ping in verse pane;
+# resolven op shell-niveau het wel doet. Resultaat: codex/claude in tmux krijgen
+# stream-disconnects bij elke api-call. Detecteer in een verse pane;
 # faal → kill-server (effe geen attached clients = veilig).
+#
+# Resolve via python3, niet via ping: ping ontbreekt op een kale image (iputils),
+# en dan meldde deze check "inconclusive" met een rauwe shell-fout erin. python3
+# is toch al een harde dependency van deze scripts, en getaddrinfo() test exact
+# de resolver waar het hier om gaat.
 TMUX_DNS_SESS="preflight-dns-$$"
 TMUX_DNS_OUT="/tmp/preflight-dns-$$.out"
 rm -f "$TMUX_DNS_OUT"
 tmux new-session -d -s "$TMUX_DNS_SESS" -c /tmp 2>/dev/null
-tmux send-keys -t "$TMUX_DNS_SESS" -l "ping -c 1 -W 2 api.openai.com > $TMUX_DNS_OUT 2>&1; echo PINGDONE_$$ >> $TMUX_DNS_OUT"
+tmux send-keys -t "$TMUX_DNS_SESS" -l "python3 -c \"import socket;socket.getaddrinfo('api.openai.com',443);print('TMUXDNS_OK')\" > $TMUX_DNS_OUT 2>&1; echo PROBEDONE_$$ >> $TMUX_DNS_OUT"
 tmux send-keys -t "$TMUX_DNS_SESS" C-m
 for _ in $(seq 1 8); do
-  grep -q "PINGDONE_$$" "$TMUX_DNS_OUT" 2>/dev/null && break
+  grep -q "PROBEDONE_$$" "$TMUX_DNS_OUT" 2>/dev/null && break
   sleep 0.5
 done
 tmux kill-session -t "$TMUX_DNS_SESS" 2>/dev/null
 TMUX_DNS_RESULT=$(cat "$TMUX_DNS_OUT" 2>/dev/null || echo "")
 rm -f "$TMUX_DNS_OUT"
 
-if echo "$TMUX_DNS_RESULT" | grep -qE "PING api\.openai\.com"; then
+if echo "$TMUX_DNS_RESULT" | grep -q "TMUXDNS_OK"; then
   ok "TMUX DNS resolver healthy"
-elif echo "$TMUX_DNS_RESULT" | grep -qE "Unknown host|cannot resolve"; then
+elif echo "$TMUX_DNS_RESULT" | grep -qE "gaierror|Name or service not known|Unknown host|cannot resolve|Temporary failure"; then
   warn "TMUX DNS resolver stale — auto-fix: killing tmux server"
   # Save list of any attached clients (rare since iTerm clients live elsewhere)
   ATTACHED=$(tmux list-clients 2>/dev/null | wc -l | tr -d ' ')
