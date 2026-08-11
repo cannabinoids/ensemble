@@ -22,7 +22,13 @@ source "$SCRIPT_DIR/collab-paths.sh"
 
 CWD="${1:-.}"
 TASK="${2:?Usage: collab-launch.sh <cwd> <task> [agents] [template]}"
-AGENTS="${3:-}"  # Optional: comma-separated agent names (e.g. "gemini,claude")
+# Optional: comma-separated agent names (e.g. "gemini,claude"). Falls back to
+# COLLAB_AGENTS so a preferred line-up can be set once in the shell instead of
+# being retyped every run; collab-preflight.sh already reads the same variable.
+# Precedence: 3rd argument > COLLAB_AGENTS > the service default (codex+claude).
+# Note this also disables the auto-fallback below, which is intended: naming
+# your agents, by argument or by env, means a dead one is a hard failure.
+AGENTS="${3:-${COLLAB_AGENTS:-}}"
 # Optional collab template key from collab-templates.json (review|implement|research|debug).
 # Assigns explicit roles to each agent instead of the generic lead/worker prompt.
 TEMPLATE="${4:-${COLLAB_TEMPLATE:-}}"

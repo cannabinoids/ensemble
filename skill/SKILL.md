@@ -94,6 +94,11 @@ Preflight checks only the CLIs you name here, so a codex quota wall does not blo
 `grok,claude` run. Naming agents explicitly also disables the auto-fallback: a dead agent
 becomes a hard failure instead of a silent swap.
 
+Also settable via `COLLAB_AGENTS`, for a preferred line-up you do not want to retype
+(`export COLLAB_AGENTS="codex,claude,grok"`). Precedence: 3rd argument > `COLLAB_AGENTS` >
+the default pair. The env var counts as naming your agents, so it disables the auto-fallback
+too.
+
 **Template selection (4th argument, optional).** A key from `collab-templates.json` that
 gives each agent an explicit role instead of the generic lead/worker prompt. Also settable
 via `COLLAB_TEMPLATE`. Pick one when the task clearly matches:
