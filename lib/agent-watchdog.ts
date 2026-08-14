@@ -9,10 +9,26 @@ const DEFAULT_NUDGE_MS = 90_000
 const DEFAULT_STALL_MS = 180_000
 const WATCHDOG_NUDGE_TEXT = 'Are you still working? Share your progress with team-say.'
 
+/**
+ * How many consecutive failed nudges before we conclude the agent is gone.
+ *
+ * A nudge fails when its tmux session no longer exists ("Command failed: tmux
+ * send-keys"). Before this limit existed the failure path never recorded
+ * `nudgedAt`, so every poll saw a never-nudged agent and tried again, forever.
+ * Measured on 2026-08-14: 45.088 failed nudges across 7 teams, 48% of the entire
+ * message archive, one team at 21.934. None of those 7 teams ever produced a
+ * summary, so the user never saw the outcome of that work.
+ */
+const DEFAULT_MAX_FAILED_NUDGES = 3
+
 interface AgentWatchdogState {
   lastMessageAt: string
   nudgedAt?: string
   stalledAt?: string
+  /** Consecutive failed nudge attempts; reset on success. */
+  failedNudges?: number
+  /** Set once we gave up on this agent, so we stop retrying and stop logging. */
+  unreachableAt?: string
 }
 
 interface AgentWatchdogDeps {
@@ -25,10 +41,17 @@ interface AgentWatchdogDeps {
   getHostById: (hostId: string) => { url: string } | undefined
   postRemoteSessionCommand: (url: string, sessionName: string, text: string) => Promise<void>
   collabDeliveryFile: (teamId: string, sessionName: string) => string
+  /**
+   * Called when every active agent of a team has become unreachable. Lets the
+   * service end the team properly instead of leaving it 'active' forever with a
+   * bridge that keeps polling a dead session.
+   */
+  onTeamUnreachable?: (teamId: string, reason: string) => void | Promise<void>
   now?: () => number
   nudgeAfterMs?: number
   stallAfterMs?: number
   pollIntervalMs?: number
+  maxFailedNudges?: number
 }
 
 function parseDuration(rawValue: string | undefined, fallback: number): number {
@@ -50,11 +73,13 @@ export class AgentWatchdog {
   private readonly now: () => number
   private readonly nudgeAfterMs: number
   private readonly stallAfterMs: number
+  private readonly maxFailedNudges: number
 
   constructor(private readonly deps: AgentWatchdogDeps) {
     this.now = deps.now ?? Date.now
     this.nudgeAfterMs = deps.nudgeAfterMs ?? getWatchdogNudgeMs()
     this.stallAfterMs = deps.stallAfterMs ?? getWatchdogStallMs()
+    this.maxFailedNudges = deps.maxFailedNudges ?? DEFAULT_MAX_FAILED_NUDGES
 
     this.timer = setInterval(() => {
       void this.poll()
@@ -112,6 +137,9 @@ export class AgentWatchdog {
       const idleMs = nowMs - lastMessageMs
       const currentState = this.state.get(stateKey) ?? { lastMessageAt }
 
+      // Already given up on this agent: never nudge or log again.
+      if (currentState.unreachableAt) continue
+
       if (!currentState.nudgedAt && idleMs >= this.nudgeAfterMs) {
         try {
           await this.nudgeAgent(team, agent.name, agent.program, agent.hostId)
@@ -121,15 +149,38 @@ export class AgentWatchdog {
           })
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err)
-          this.deps.appendMessage(team.id, {
-            id: uuidv4(),
-            teamId: team.id,
-            from: 'ensemble',
-            to: 'team',
-            content: `❌ Watchdog failed to nudge ${agent.name}: ${reason}`,
-            type: 'chat',
-            timestamp: new Date(nowMs).toISOString(),
+          const failedNudges = (currentState.failedNudges ?? 0) + 1
+          const givingUp = failedNudges >= this.maxFailedNudges
+
+          this.state.set(stateKey, {
+            ...currentState,
+            failedNudges,
+            // Marking it stalled too keeps the existing stall reporting coherent.
+            ...(givingUp
+              ? {
+                  unreachableAt: new Date(nowMs).toISOString(),
+                  stalledAt: new Date(nowMs).toISOString(),
+                }
+              : {}),
           })
+
+          // Only speak up on the first failure and on the final one. In between we
+          // stay quiet, because it is the same failure and the feed is the archive.
+          if (failedNudges === 1 || givingUp) {
+            this.deps.appendMessage(team.id, {
+              id: uuidv4(),
+              teamId: team.id,
+              from: 'ensemble',
+              to: 'team',
+              content: givingUp
+                ? `❌ Watchdog gave up on ${agent.name} after ${failedNudges} failed nudges: ${reason}`
+                : `❌ Watchdog failed to nudge ${agent.name}: ${reason}`,
+              type: 'chat',
+              timestamp: new Date(nowMs).toISOString(),
+            })
+          }
+
+          if (givingUp) await this.reportIfTeamUnreachable(team)
         }
         continue
       }
@@ -153,6 +204,27 @@ export class AgentWatchdog {
         ...currentState,
         stalledAt: new Date(nowMs).toISOString(),
       })
+    }
+  }
+
+  /**
+   * Once no active agent is reachable anymore the team cannot produce anything.
+   * Hand it to the service so it can write a summary and disband, instead of
+   * leaving it 'active' with a bridge polling a session that no longer exists.
+   */
+  private async reportIfTeamUnreachable(team: EnsembleTeam): Promise<void> {
+    if (!this.deps.onTeamUnreachable) return
+    const activeAgents = team.agents.filter(candidate => candidate.status === 'active')
+    const allGone = activeAgents.every(agent => this.state.get(`${team.id}:${agent.name}`)?.unreachableAt)
+    if (!allGone) return
+
+    try {
+      await this.deps.onTeamUnreachable(
+        team.id,
+        `all ${activeAgents.length} agent session(s) unreachable after ${this.maxFailedNudges} failed nudges`,
+      )
+    } catch (err) {
+      console.error(`[Watchdog] onTeamUnreachable failed for ${team.id}:`, err)
     }
   }
 
@@ -186,4 +258,10 @@ export class AgentWatchdog {
   }
 }
 
-export { DEFAULT_POLL_INTERVAL_MS, DEFAULT_NUDGE_MS, DEFAULT_STALL_MS, WATCHDOG_NUDGE_TEXT }
+export {
+  DEFAULT_POLL_INTERVAL_MS,
+  DEFAULT_NUDGE_MS,
+  DEFAULT_STALL_MS,
+  DEFAULT_MAX_FAILED_NUDGES,
+  WATCHDOG_NUDGE_TEXT,
+}

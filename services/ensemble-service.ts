@@ -18,7 +18,7 @@ import {
 } from '../lib/agent-spawner'
 import { isSelf, getHostById, getSelfHostId } from '../lib/hosts-config'
 import { getRuntime } from '../lib/agent-runtime'
-import { resolveAgentProgram } from '../lib/agent-config'
+import { resolveAgentProgram, resolveAgentProgramDetailed, availableAgentKeys } from '../lib/agent-config'
 import { AgentWatchdog } from '../lib/agent-watchdog'
 import {
   collabPromptFile, collabDeliveryFile, collabSummaryFile, collabMessagesFile,
@@ -111,10 +111,42 @@ class EnsembleService {
       getHostById,
       postRemoteSessionCommand,
       collabDeliveryFile,
+      onTeamUnreachable: (teamId, reason) => this.endUnreachableTeam(teamId, reason),
     })
 
     for (const signal of ['SIGINT', 'SIGTERM', 'beforeExit', 'exit'] as const) {
       process.once(signal, () => this.stop())
+    }
+  }
+
+  /**
+   * A team whose agents are all gone can never finish on its own. End it the
+   * normal way so it still produces a summary, rather than leaving it 'active'
+   * with a watchdog and a bridge working on a session that no longer exists.
+   */
+  private async endUnreachableTeam(teamId: string, reason: string): Promise<void> {
+    if (this.disbandingTeams.has(teamId)) return
+    const team = getTeam(teamId)
+    if (!team || team.status !== 'active') return
+
+    this.disbandingTeams.add(teamId)
+    try {
+      console.warn(`[Ensemble] Team ${teamId} unreachable: ${reason}`)
+      appendMessage(teamId, {
+        id: uuidv4(),
+        teamId,
+        from: 'ensemble',
+        to: 'team',
+        content: `🛑 Team ended by watchdog: ${reason}`,
+        type: 'chat',
+        timestamp: new Date().toISOString(),
+      })
+      await writeDisbandSummary(teamId, { failureReason: reason })
+      await disbandTeam(teamId)
+    } catch (err) {
+      console.error(`[Ensemble] Failed to end unreachable team ${teamId}:`, err)
+    } finally {
+      this.disbandingTeams.delete(teamId)
     }
   }
 
@@ -127,6 +159,12 @@ class EnsembleService {
       if (team.status !== 'active') continue
       const age = now - new Date(team.createdAt).getTime()
       if (age > staleThresholdMs) {
+        // Write a summary first: these teams did real work whose outcome would
+        // otherwise be lost, which is exactly what happened to 7 teams before.
+        const reason = `stale on service start, still active after ${formatDuration(age)}`
+        void writeDisbandSummary(team.id, { failureReason: reason }).catch(err =>
+          console.error(`[Ensemble] Stale summary failed for ${team.id}:`, err),
+        )
         updateTeam(team.id, { ...team, status: 'disbanded' })
         count++
       }
@@ -443,6 +481,21 @@ export function buildPromptPreview(params: {
 export async function createEnsembleTeam(
   request: CreateTeamRequest
 ): Promise<ServiceResult<{ team: EnsembleTeam }>> {
+  // Reject unknown agents before creating anything. The caller named these
+  // explicitly, so silently substituting claude would hand back a team that
+  // looks right and is not: two identical models where two different ones were
+  // asked for. Cheaper to fail here than to discover it halfway a review.
+  const unknown = request.agents
+    .map(spec => resolveAgentProgramDetailed(spec.program))
+    .filter(resolution => resolution.how === 'fallback')
+  if (unknown.length > 0) {
+    const names = unknown.map(u => `"${u.requested}"`).join(', ')
+    return {
+      error: `Unknown agent(s): ${names}. Available: ${availableAgentKeys().join(', ')}`,
+      status: 400,
+    }
+  }
+
   const team = createTeam(request)
   const cwd = request.workingDirectory || process.cwd()
   const worktreeMap = new Map<string, WorktreeInfo>()
@@ -528,9 +581,17 @@ export async function createEnsembleTeam(
       team.agents[i].hostId = hostId
       team.agents[i].status = 'active'
 
+      // Record what was actually launched, not just what was asked for. The
+      // requested name and the resolved command can differ, and when they do you
+      // want it in the archive rather than having to dig through tmux panes
+      // afterwards to find out which model really answered.
+      const resolution = resolveAgentProgramDetailed(agentSpec.program)
+      const via = resolution.how === 'exact'
+        ? resolution.agent.command
+        : `${resolution.agent.command} (matched via ${resolution.how})`
       appendMessage(team.id, {
         id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
-        content: `${agentSpec.name} (${agentSpec.program} @ ${hostId}) has joined #${team.name}`,
+        content: `${agentSpec.name} (${agentSpec.program} → ${via} @ ${hostId}) has joined #${team.name}`,
         type: 'chat', timestamp: new Date().toISOString(),
       })
     } catch (err: unknown) {
@@ -824,13 +885,67 @@ export async function sendTeamMessage(
  * picked up by the background watcher in the Claude Code session.
  * Mirrors the format from cli/monitor.ts disbandTeam().
  */
-export async function writeDisbandSummary(teamId: string): Promise<void> {
+/**
+ * Summary for a run that produced no agent messages at all.
+ *
+ * Written so a failed run is distinguishable from one that is still going. It
+ * reports what the team was asked to do, who was supposed to do it, and the best
+ * diagnosis available, including the ensemble-side errors that are usually the
+ * actual cause (a failed prompt injection or a session that never came up).
+ */
+async function writeFailureSummary(
+  team: EnsembleTeam,
+  messages: EnsembleMessage[],
+  failureReason?: string,
+): Promise<void> {
+  const duration = formatDuration(Date.now() - new Date(team.createdAt).getTime())
+  const errors = messages
+    .filter(m => m.from === 'ensemble' && /❌|⚠️|🛑|failed|error/i.test(m.content))
+    .slice(-5)
+    .map(m => `  ${m.timestamp?.slice(11, 19) || '--:--:--'}  ${m.content.replace(/\s+/g, ' ').slice(0, 160)}`)
+
+  const roster = team.agents.map(a => `${a.name} (${a.program}, ${a.status})`).join(', ') || 'none'
+  const lines = [
+    `Task: ${team.description || 'unknown'}`,
+    `Duration: ${duration}`,
+    `Messages: 0`,
+    `Full transcript: ${collabMessagesFile(team.id)}`,
+    '',
+    'RUN FAILED: no agent ever posted a message.',
+    failureReason ? `Reason: ${failureReason}` : '',
+    `Agents: ${roster}`,
+    '',
+    errors.length
+      ? `Last ensemble-side errors:\n${errors.join('\n')}`
+      : 'No ensemble-side errors were recorded, which points at prompt delivery:\n' +
+        `  the agents started but never received their prompt. Retry with:\n` +
+        `  scripts/collab-rescue.sh ${team.id}`,
+  ].filter(Boolean)
+
+  const summaryFile = collabSummaryFile(team.id)
+  fs.mkdirSync(path.dirname(summaryFile), { recursive: true })
+  fs.writeFileSync(summaryFile, lines.join('\n') + '\n')
+  console.log(`[Ensemble] Failure summary written to ${summaryFile}`)
+}
+
+export async function writeDisbandSummary(
+  teamId: string,
+  options: { failureReason?: string } = {},
+): Promise<void> {
   const team = getTeam(teamId)
   if (!team) return
 
   const messages = getMessages(teamId)
   const agentMsgs = messages.filter(m => m.from !== 'ensemble' && m.from !== 'user')
-  if (agentMsgs.length === 0) return
+
+  // A run without agent messages used to return here and write nothing at all,
+  // so the caller was left with an empty runtime dir and no explanation. That is
+  // the worst possible outcome: silence that looks identical to "still working".
+  // Write a short failure summary instead, with whatever diagnosis we have.
+  if (agentMsgs.length === 0) {
+    await writeFailureSummary(team, messages, options.failureReason)
+    return
+  }
 
   const now = new Date()
   const createdAt = new Date(team.createdAt)
