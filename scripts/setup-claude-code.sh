@@ -112,14 +112,14 @@ else
 fi
 
 HAS_AGENT=0
-for cmd in claude codex aider; do
+for cmd in claude codex grok; do
   if command -v "$cmd" &>/dev/null; then
     echo -e "  ${CHECK} ${cmd} CLI found"
     HAS_AGENT=1
   fi
 done
 if [ "$HAS_AGENT" -eq 0 ]; then
-  echo -e "  ${WARN} No agent CLI found (install claude, codex, or aider)"
+  echo -e "  ${WARN} No agent CLI found (install claude, codex, or grok)"
   MISSING=$((MISSING + 1))
 fi
 

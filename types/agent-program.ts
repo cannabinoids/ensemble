@@ -6,7 +6,7 @@
 export interface AgentProgram {
   /** Unique identifier matching the key in agents.json (e.g. "codex", "claude") */
   name: string
-  /** CLI command to launch the agent (e.g. "codex", "claude", "aider") */
+  /** CLI command to launch the agent (e.g. "codex", "claude", "glm") */
   command: string
   /** Default flags appended to the command (e.g. ["-m", "gpt-5.4"]) */
   flags: string[]

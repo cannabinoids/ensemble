@@ -50,7 +50,7 @@ jobs:
           echo "node $(node --version)"
           echo "tmux $(tmux -V)"
           echo "python $(python3 --version)"
-          for cli in claude codex grok aider gemini; do
+          for cli in claude codex grok gemini; do
             if command -v "$cli" > /dev/null 2>&1; then
               echo "$cli: present (unexpected on a clean runner)"
             else

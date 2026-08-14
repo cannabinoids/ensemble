@@ -37,7 +37,7 @@ nav_order: 7
 ```
 ensemble/
 ├── server.ts                  # HTTP server (port 23000)
-├── agents.json                # Agent program definitions (codex, claude, grok, gemini, aider, opencode)
+├── agents.json                # Agent program definitions (codex, claude, grok, gemini, glm, opencode)
 ├── collab-templates.json      # Pre-built team templates
 ├── cli/
 │   ├── ensemble.ts            # CLI entry point
@@ -109,7 +109,7 @@ first, then a substring match (so `claude code` finds `claude`), and finally a f
 `claude`. That fallback is worth knowing about, because it means an unknown or misspelled
 program name produces a duplicate Claude agent instead of an error.
 
-Shipped programs: `codex` (default lead), `claude` (default worker), `grok`, `gemini`, `aider`,
+Shipped programs: `codex` (default lead), `claude` (default worker), `grok`, `gemini`, `glm`,
 `opencode`. See [Configuration](configuration#supported-agents) for their status and flags.
 
 ### Agent Watchdog

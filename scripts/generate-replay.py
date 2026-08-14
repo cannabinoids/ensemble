@@ -33,14 +33,18 @@ NICK_COLORS_MODERN = {
     "codex": {"bg": "#1e3a5f", "text": "#60a5fa", "badge": "#2563eb", "icon": "◆"},
     "claude": {"bg": "#1a3328", "text": "#4ade80", "badge": "#16a34a", "icon": "●"},
     "gemini": {"bg": "#3b2e1a", "text": "#fbbf24", "badge": "#d97706", "icon": "★"},
-    "aider": {"bg": "#2d1a3b", "text": "#c084fc", "badge": "#9333ea", "icon": "▲"},
+    "glm": {"bg": "#2d1a3b", "text": "#c084fc", "badge": "#9333ea", "icon": "◈"},
+    "grok": {"bg": "#2f2f2f", "text": "#e5e5e5", "badge": "#525252", "icon": "✕"},
+    "opencode": {"bg": "#12363b", "text": "#22d3ee", "badge": "#0891b2", "icon": "▣"},
 }
 
 NICK_COLORS_IRC = {
     "codex": "#0000CC",
     "claude": "#009300",
     "gemini": "#CC8800",
-    "aider": "#8800CC",
+    "glm": "#8800CC",
+    "grok": "#666666",
+    "opencode": "#00AACC",
 }
 
 
