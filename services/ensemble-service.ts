@@ -19,6 +19,7 @@ import {
 import { isSelf, getHostById, getSelfHostId } from '../lib/hosts-config'
 import { getRuntime } from '../lib/agent-runtime'
 import { resolveAgentProgram, resolveAgentProgramDetailed, availableAgentKeys } from '../lib/agent-config'
+import { exportObservation, checkMemoryEndpoint } from '../lib/memory-export'
 import { AgentWatchdog } from '../lib/agent-watchdog'
 import {
   collabPromptFile, collabDeliveryFile, collabSummaryFile, collabMessagesFile,
@@ -112,6 +113,21 @@ class EnsembleService {
       postRemoteSessionCommand,
       collabDeliveryFile,
       onTeamUnreachable: (teamId, reason) => this.endUnreachableTeam(teamId, reason),
+    })
+
+    // Say at startup whether collab outcomes can reach claude-mem. Without this
+    // a wrong port stays invisible: every export fails and nothing reports it,
+    // which is how 29 teams in a row wrote nothing without anyone noticing.
+    void checkMemoryEndpoint().then(result => {
+      if (result.ok) {
+        console.log(`[Ensemble] Memory export ready at ${result.endpoint}`)
+      } else {
+        console.warn(
+          `[Ensemble] Memory export UNAVAILABLE at ${result.endpoint}`
+          + ` (${result.error || `HTTP ${result.status}`}).`
+          + ` Collab outcomes will not be stored. Override with ENSEMBLE_MEMORY_URL.`,
+        )
+      }
     })
 
     for (const signal of ['SIGINT', 'SIGTERM', 'beforeExit', 'exit'] as const) {
@@ -1122,17 +1138,28 @@ export async function disbandTeam(teamId: string): Promise<ServiceResult<{ team:
         || (cwdMatch ? cwdMatch[1].split('/').pop() : undefined)
         || 'ensemble'
 
-      fetch('http://localhost:37777/api/observations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      void exportObservation(
+        {
           title: `Collab: ${team.description.slice(0, 80)}`,
           subtitle: `${agents.join(' + ')} — ${duration}, ${agentMessages.length} messages`,
           type: 'discovery',
           narrative: `Team "${team.name}" (${duration}):\nTask: ${team.description.slice(0, 200)}\n\n${summaryParts.join('\n\n')}`,
           project,
-        }),
-      }).catch(() => {})
+        },
+        collabRuntimeDir(teamId),
+      ).then(result => {
+        if (result.ok) return
+        // Say it out loud, in both places the user actually looks. A silent
+        // failure here is how this feature stayed dead for weeks.
+        const why = result.error || `HTTP ${result.status}`
+        console.warn(`[Ensemble] Memory export failed (${result.endpoint}): ${why}`)
+        appendMessage(teamId, {
+          id: uuidv4(), teamId, from: 'ensemble', to: 'team',
+          content: `⚠️ Kon deze collab niet naar claude-mem schrijven (${result.endpoint}): ${why}. `
+            + `Payload bewaard als pending-observation.json in de runtime-map.`,
+          type: 'chat', timestamp: new Date().toISOString(),
+        })
+      })
     }
   } catch { /* non-fatal */ }
 
