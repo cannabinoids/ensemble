@@ -52,5 +52,14 @@
     "inputMethod": "pasteFromFile",
     "color": "white",
     "icon": "✕"
+  },
+  "glm": {
+    "name": "glm",
+    "command": "glm",
+    "flags": ["--permission-mode", "auto"],
+    "readyMarker": "❯",
+    "inputMethod": "sendKeys",
+    "color": "magenta",
+    "icon": "◈"
   }
 }
