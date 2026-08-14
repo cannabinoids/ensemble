@@ -223,6 +223,9 @@ D='\033[2m'
 BD='\033[1m'
 R='\033[0m'
 
+# Agent colours come from agents.json, not from a table per script.
+source "$(dirname "${BASH_SOURCE[0]}")/agent-colors.sh"
+
 speed_label="${SPEED}x"
 case "$SPEED" in
   0|0.0|0.00) speed_label="instant" ;;
@@ -259,12 +262,7 @@ if delay > 0:
 PY
     fi
 
-    case "$sender" in
-      codex-1)  color="$C1" ;;
-      claude-2) color="$C2" ;;
-      ensemble) color="$W" ;;
-      *)        color="$W" ;;
-    esac
+    color=$(agent_color "$sender")
 
     while IFS= read -r line || [ -n "$line" ]; do
       printf '  %b%s%b %b│%b %b[%s]%b %s\n' \

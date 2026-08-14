@@ -23,6 +23,9 @@ D='\033[2m'     # dim
 BD='\033[1m'    # bold
 R='\033[0m'     # reset
 
+# Agent colours come from agents.json, not from a table per script.
+source "$(dirname "${BASH_SOURCE[0]}")/agent-colors.sh"
+
 echo ""
 echo -e "  ${BD}${W}◈ Live feed${R} — berichten verschijnen hieronder"
 echo -e "  ${D}─────────────────────────────────────────${R}"
@@ -45,11 +48,7 @@ while true; do
     if [ "${TOTAL:-0}" -gt "$SEEN" ]; then
       while IFS=$'\t' read -r from content; do
         [ -z "${from:-}" ] && continue
-        case "$from" in
-          codex-1)  color="$C1" ;;
-          claude-2) color="$C2" ;;
-          *)        color="$W" ;;
-        esac
+        color=$(agent_color "$from")
         echo -e "  ${color}${from}${R} ${D}│${R} ${content}"
       done < <(print_new_messages "$JSONL" "$SEEN")
     fi
