@@ -43,10 +43,18 @@ interface ServiceResult<T> {
 
 const IDLE_CHECK_INTERVAL_MS = 15_000
 const COMPLETION_SIGNAL_WINDOW_MS = 180_000
-const SINGLE_SIGNAL_IDLE_THRESHOLD_MS = 120_000
-// Two agents using completion wording still needs the room to have gone quiet
-// first, otherwise a closure proposal mid-conversation ends the session.
-const TWO_SIGNAL_IDLE_THRESHOLD_MS = 60_000
+// How long a team must be silent before completion WORDING may end it.
+//
+// These were 120s and 60s, and that killed a four-agent research team after
+// 4,5 minutes on 2026-08-15. Two agents had written "eerste lezing klaar; nu
+// tests" and "systematische vergelijking klaar" about sub-steps, after which
+// everyone went quiet to actually read code. Sixty seconds of silence is not an
+// idle team, it is an agent reading a file. Research runs routinely go minutes
+// without posting, so the wording path needs a margin that only a genuinely
+// finished team reaches. The exact sentinel remains the fast path and is
+// unaffected: a team that is really done still ends within seconds.
+const SINGLE_SIGNAL_IDLE_THRESHOLD_MS = 480_000
+const TWO_SIGNAL_IDLE_THRESHOLD_MS = 300_000
 const MIN_MESSAGES_BEFORE_AUTO_DISBAND = 10
 // Explicit sentinel: when every active agent sends this exact marker as a full
 // message, the team auto-disbands immediately — no idle wait, no minimum
@@ -60,6 +68,34 @@ const COMPLETION_PATTERNS = [
   // "klaar" but not "klaar sta", "klaar ben", "klaar om", "klaar voor"
   /(?:^|[^\p{L}\p{N}_])klaar(?!\s+(?:sta|ben|om|voor|zodra))(?:[^\p{L}\p{N}_]|$)/iu,
   /(?:^|\s)tot de volgende(?:\s|$)/i,
+]
+
+// Phrases that mean "this part is done, I am carrying on". A message carrying one
+// of these is a progress report, not a closing statement, however much finished
+// wording it contains.
+const CONTINUATION_PATTERNS = [
+  /\bnu\s+(?:ga|pak|lees|start|check|onderzoek|kijk|volgt|de\b)/i,
+  /\b(?:ik|we)\s+(?:ga|gaan)\s+(?:nu\s+)?(?:verder|door|kijken|lezen|onderzoeken)/i,
+  /\bvervolgens\b|\bdaarna\b|\bhierna\b/i,
+  /\beerste\s+(?:lezing|ronde|indruk|scan|bevinding)/i,
+  /\bdeel(?:taak|resultaat|bevinding)\b|\btussenstand\b|\bprogress\b/i,
+  /\bwacht\s+(?:op|nog)\b|\bmeer\s+volgt\b|\bkom\s+ik\s+op\s+terug\b/i,
+  // Explicitly claiming a slice of the work is the opposite of finishing it
+  /\bik\s+pak\b|\bik\s+claim\b|\bmijn\s+(?:hoek|kavel|deel)\b/i,
+  // "<werkproduct> klaar" reports a deliverable, "ik ben klaar" reports a person.
+  // Only the second one ends a session. This is the distinction that "systematische
+  // vergelijking klaar" fell foul of: a finished comparison is not a finished agent.
+  /\b(?:vergelijking|analyse|lezing|ronde|scan|check|onderzoek|inventarisatie|review|bevindingen|tabel|overzicht)\s+(?:is\s+)?(?:klaar|done|afgerond)\b/i,
+]
+
+// Unmistakable closing statements. These outrank the continuation filter: an
+// agent that says it has nothing left to add is finished, even if the same
+// sentence mentions a deliverable that is "afgerond".
+const CLOSING_PATTERNS = [
+  /\bniets?\s+(?:meer\s+)?(?:toe\s+te\s+voegen|te\s+melden|op(?:en)?staand)/i,
+  /\bgeen\s+(?:openstaande|resterende)\s+punten\b/i,
+  /\b(?:ik\s+ben|we\s+zijn)\s+klaar\b/i,
+  /\bik\s+sluit\s+(?:af|hierbij)\b|\bakkoord\s+met\s+(?:sluiten|closure)\b/i,
 ]
 
 // Interactive gates that block agent startup and need an automated response.
@@ -80,6 +116,19 @@ const AUTO_CONFIRM_GATES = [
 interface CompletionSignal {
   agentName: string
   timestamp: number
+}
+
+/**
+ * Does this message mean the agent is done, or only that a step is done?
+ *
+ * Order matters. An explicit closing statement wins outright. Otherwise a
+ * message that reports progress or a delivered work product is not an ending,
+ * however much finishing vocabulary it contains. Only what is left counts.
+ */
+function isCompletionStatement(content: string): boolean {
+  if (CLOSING_PATTERNS.some(pattern => pattern.test(content))) return true
+  if (!COMPLETION_PATTERNS.some(pattern => pattern.test(content))) return false
+  return !CONTINUATION_PATTERNS.some(pattern => pattern.test(content))
 }
 // Telegram notifications: set both env vars to enable, omit to disable
 const TELEGRAM_BOT_TOKEN = process.env.ENSEMBLE_TELEGRAM_BOT_TOKEN || ''
@@ -274,7 +323,7 @@ class EnsembleService {
   }
 
   private hasCompletionSignal(content: string): boolean {
-    return COMPLETION_PATTERNS.some(pattern => pattern.test(content))
+    return isCompletionStatement(content)
   }
 
   private hasTwoRecentCompletionSignals(signals: CompletionSignal[]): boolean {
@@ -1164,4 +1213,16 @@ export async function disbandTeam(teamId: string): Promise<ServiceResult<{ team:
   } catch { /* non-fatal */ }
 
   return { data: { team: updated! }, status: 200 }
+}
+
+/**
+ * Internals exposed for tests only. The completion check is pure, so it can be
+ * verified against the actual messages that once ended a team too early.
+ */
+export const __testing = {
+  hasCompletionSignal: isCompletionStatement,
+  TWO_SIGNAL_IDLE_THRESHOLD_MS,
+  SINGLE_SIGNAL_IDLE_THRESHOLD_MS,
+  COMPLETION_PATTERNS,
+  CONTINUATION_PATTERNS,
 }
