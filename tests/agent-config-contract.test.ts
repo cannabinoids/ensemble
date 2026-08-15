@@ -12,6 +12,7 @@
  *
  * Run: npx tsx tests/agent-config-contract.test.ts
  */
+import { afterAll, describe, it } from 'vitest'
 import assert from 'node:assert'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -25,7 +26,6 @@ import {
   UnknownAgentError,
 } from '../lib/agent-config'
 
-let failures = 0
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ensemble-config-'))
 const configPath = path.join(tmpDir, 'agents.json')
 
@@ -45,27 +45,17 @@ function agent(name: string) {
   }
 }
 
-async function check(name: string, fn: () => void) {
-  try {
-    fn()
-    console.log(`  ok  ${name}`)
-  } catch (err) {
-    failures++
-    console.error(`  FAIL ${name}\n       ${err instanceof Error ? err.message : err}`)
-  }
-}
 
-async function main() {
-  console.log('agent config contract')
-  process.env['ENSEMBLE_AGENTS_CONFIG'] = configPath
+describe('agent config contract', () => {
+    process.env['ENSEMBLE_AGENTS_CONFIG'] = configPath
   writeConfig({ claude: agent('claude'), codex: agent('codex') })
   clearAgentsConfigCache()
 
-  await check('reads the config', () => {
+  it('reads the config', () => {
     assert.deepStrictEqual(availableAgentKeys().sort(), ['claude', 'codex'])
   })
 
-  await check('picks up a NEW agent without a restart (the mtime trap)', () => {
+  it('picks up a NEW agent without a restart (the mtime trap)', () => {
     // Force a distinct mtime; some filesystems have coarse timestamps.
     const cfg = { claude: agent('claude'), codex: agent('codex'), glm: agent('glm') }
     writeConfig(cfg)
@@ -76,38 +66,36 @@ async function main() {
     assert.strictEqual(resolveAgentProgram('glm').command, 'glm')
   })
 
-  await check('unknown agent throws in strict mode instead of becoming claude', () => {
+  it('unknown agent throws in strict mode instead of becoming claude', () => {
     assert.throws(
       () => resolveAgentProgram('aider', { strict: true }),
       (err: unknown) => err instanceof UnknownAgentError && err.requested === 'aider',
     )
   })
 
-  await check('unknown agent still falls back when not strict, but says so', () => {
+  it('unknown agent still falls back when not strict, but says so', () => {
     const resolved = resolveAgentProgramDetailed('aider')
     assert.strictEqual(resolved.how, 'fallback')
     assert.strictEqual(resolved.agent.command, 'claude', 'fallback target is still claude')
   })
 
-  await check('an exact match reports how=exact, so callers can trust it', () => {
+  it('an exact match reports how=exact, so callers can trust it', () => {
     assert.strictEqual(resolveAgentProgramDetailed('codex').how, 'exact')
   })
 
-  await check('"claude code" still resolves, and is labelled as a substring match', () => {
+  it('"claude code" still resolves, and is labelled as a substring match', () => {
     const resolved = resolveAgentProgramDetailed('claude code')
     assert.strictEqual(resolved.agent.command, 'claude')
     assert.strictEqual(resolved.how, 'substring')
   })
 
-  await check('keeps serving the last good config if the file disappears', () => {
+  it('keeps serving the last good config if the file disappears', () => {
     loadAgentsConfig()
     fs.unlinkSync(configPath)
     assert.ok(availableAgentKeys().includes('claude'), 'should not crash on a missing file')
   })
 
-  fs.rmSync(tmpDir, { recursive: true, force: true })
-  console.log(failures === 0 ? '\nall passed' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
-}
-
-void main()
+  afterAll(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+})

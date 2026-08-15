@@ -56,6 +56,15 @@ The `agents.json` file defines which AI agents ensemble can spawn. Located in th
     "color": "green",
     "icon": "●"
   },
+  "glm": {
+    "name": "glm",
+    "command": "glm",
+    "flags": ["--permission-mode", "auto"],
+    "readyMarker": "\u276f",
+    "inputMethod": "sendKeys",
+    "color": "magenta",
+    "icon": "\u25c8"
+  },
   "grok": {
     "name": "grok",
     "command": "grok",
@@ -115,7 +124,7 @@ The default team is **Codex (lead) + Claude Code (worker)**. This is the fully t
 | **Claude Code** | Fully tested | Yes (worker) | Uses `sendKeys` input |
 | **Grok CLI** | Tested in three-agent teams | No | Uses `pasteFromFile`, `--always-approve --trust`. Needs `hints = { project_picker_disabled = true }` in `~/.grok/config.toml`, otherwise the agent hangs on a directory picker in a fresh pane. |
 | **Gemini CLI** | Experimental | No | Uses `pasteFromFile`, `--yolo` flag. May stop responding due to free-tier rate limits or internal TUI issues. Use a paid API key (`gemini /auth`) for best results. |
-| **Aider** | Untested | No | Basic config included in `agents.json` |
+| **GLM** | Tested in four-agent teams | No | Runs Claude Code against the Z.ai endpoint, so it behaves like `claude` (`sendKeys`, `--permission-mode auto`) with a GLM model underneath. Needs a `glm` command on PATH that sets `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`. |
 | **opencode** | Untested | No | Basic config included in `agents.json`, `sendKeys` input |
 | **Any CLI tool** | Custom | No | See [Adding a custom agent](#adding-a-custom-agent) |
 

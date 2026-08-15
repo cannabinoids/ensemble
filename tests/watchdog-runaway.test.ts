@@ -8,12 +8,12 @@
  *
  * Run: npx tsx tests/watchdog-runaway.test.ts
  */
+import { describe, it } from 'vitest'
 import assert from 'node:assert'
 import { AgentWatchdog } from '../lib/agent-watchdog'
 import type { EnsembleMessage, EnsembleTeam } from '../types/ensemble'
 
 const TEAM_ID = 'team-runaway'
-let failures = 0
 
 function makeTeam(agentNames: string[]): EnsembleTeam {
   return {
@@ -79,27 +79,17 @@ function harness(agentNames: string[]) {
   }
 }
 
-async function check(name: string, fn: () => Promise<void>) {
-  try {
-    await fn()
-    console.log(`  ok  ${name}`)
-  } catch (err) {
-    failures++
-    console.error(`  FAIL ${name}\n       ${err instanceof Error ? err.message : err}`)
-  }
-}
 
-async function main() {
-  console.log('watchdog runaway regression')
-
-  await check('stops nudging after the limit instead of retrying forever', async () => {
+describe('watchdog runaway', () => {
+  
+  it('stops nudging after the limit instead of retrying forever', async () => {
     const h = harness(['claude-1'])
     await h.pollTimes(25)
     assert.strictEqual(h.attempts(), 3, `expected 3 attempts, got ${h.attempts()}`)
     h.watchdog.stop()
   })
 
-  await check('does not flood the feed: one first-failure line, one give-up line', async () => {
+  it('does not flood the feed: one first-failure line, one give-up line', async () => {
     const h = harness(['claude-1'])
     await h.pollTimes(25)
     const failureLines = h.messages.filter(m => m.content.includes('❌'))
@@ -108,7 +98,7 @@ async function main() {
     h.watchdog.stop()
   })
 
-  await check('reports the team as unreachable exactly once', async () => {
+  it('reports the team as unreachable exactly once', async () => {
     const h = harness(['claude-1'])
     await h.pollTimes(25)
     assert.strictEqual(h.unreachable.length, 1, `expected 1 report, got ${h.unreachable.length}`)
@@ -116,7 +106,7 @@ async function main() {
     h.watchdog.stop()
   })
 
-  await check('waits for ALL agents to be gone before ending the team', async () => {
+  it('waits for ALL agents to be gone before ending the team', async () => {
     const h = harness(['claude-1', 'codex-2'])
     await h.pollTimes(25)
     // 2 agents x 3 attempts, and only one team-level report once both are gone.
@@ -124,9 +114,4 @@ async function main() {
     assert.strictEqual(h.unreachable.length, 1, `expected 1 report, got ${h.unreachable.length}`)
     h.watchdog.stop()
   })
-
-  console.log(failures === 0 ? '\nall passed' : `\n${failures} FAILED`)
-  process.exit(failures === 0 ? 0 : 1)
-}
-
-void main()
+})

@@ -89,6 +89,12 @@ describe('onboarding smoke test', () => {
     }))
     vi.doMock('../lib/agent-config', () => ({
       resolveAgentProgram: vi.fn(() => ({ readyMarker: '>', inputMethod: 'sendKeys' })),
+      resolveAgentProgramDetailed: vi.fn((program: string) => ({
+        agent: { command: program, readyMarker: '>', inputMethod: 'sendKeys' },
+        how: 'exact',
+        requested: program,
+      })),
+      availableAgentKeys: vi.fn(() => ['claude', 'codex']),
     }))
     vi.doMock('../lib/hosts-config', () => ({
       isSelf: vi.fn(() => true),

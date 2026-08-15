@@ -195,8 +195,14 @@ fi
 # spawned, reported ready, and then sat silent for the whole session.
 # (2026-08-11: a ChatGPT-auth account rejecting an API-only model name did
 # exactly this.)
+# stdin MUST be /dev/null (2026-08-14, codex-cli 0.147.0): with an inherited
+# stdin that stays open, `codex exec` treats it as extra prompt input, prints
+# "Reading additional input from stdin..." and blocks until the timeout kills
+# it. The probe then finds no sentinel and disables a perfectly healthy codex.
+# Only shows up when preflight is called from a caller whose stdin is a live
+# pipe (an agent shell, CI), which is exactly where a false negative hurts.
 CODEX_PROBE_OUT=$(timeout 40 codex exec --dangerously-bypass-approvals-and-sandbox \
-  "Reply with exactly this and nothing else: PROBE-OK-7391" 2>&1)
+  "Reply with exactly this and nothing else: PROBE-OK-7391" < /dev/null 2>&1)
 if echo "$CODEX_PROBE_OUT" | grep -qiE "hit your usage limit|usage limit|rate.?limit|quota"; then
   RESET_TIME=$(echo "$CODEX_PROBE_OUT" | grep -oE "try again at[^.]*\." | head -1)
   warn "Codex quota dead: ${RESET_TIME:-(unknown reset time)} — codex disabled this run"

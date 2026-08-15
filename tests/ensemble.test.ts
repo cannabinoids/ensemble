@@ -288,6 +288,12 @@ describe('shouldAutoDisband() — tested via checkIdleTeams()', () => {
     }))
     vi.doMock('../lib/agent-config', () => ({
       resolveAgentProgram: vi.fn(() => ({ readyMarker: '>', inputMethod: 'sendKeys' })),
+      resolveAgentProgramDetailed: vi.fn((program: string) => ({
+        agent: { command: program, readyMarker: '>', inputMethod: 'sendKeys' },
+        how: 'exact',
+        requested: program,
+      })),
+      availableAgentKeys: vi.fn(() => ['claude', 'codex']),
     }))
 
     const mod = await import('../services/ensemble-service')
@@ -316,8 +322,8 @@ describe('shouldAutoDisband() — tested via checkIdleTeams()', () => {
     const team = makeTeam()
     const messages: EnsembleMessage[] = [
       ...fillerMessages(8),
-      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Task is done', timestamp: '2026-03-18T12:03:00.000Z' }),
-      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Alles afgerond', timestamp: '2026-03-18T12:03:30.000Z' }),
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Task is done', timestamp: '2026-03-18T11:59:00.000Z' }),
+      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Alles afgerond', timestamp: '2026-03-18T11:59:30.000Z' }),
     ]
 
     const { mod, appendedMessages } = await setupServiceWithMocks(team, messages)
@@ -326,7 +332,7 @@ describe('shouldAutoDisband() — tested via checkIdleTeams()', () => {
     expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(true)
   })
 
-  it('does NOT auto-disband when only one completion signal exists and idle is <= 120s', async () => {
+  it('does NOT auto-disband when only one completion signal exists and the team just spoke', async () => {
     const team = makeTeam()
     const messages: EnsembleMessage[] = [
       makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Task is done', timestamp: '2026-03-18T12:03:40.000Z' }),
@@ -339,12 +345,12 @@ describe('shouldAutoDisband() — tested via checkIdleTeams()', () => {
     expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(false)
   })
 
-  it('auto-disbands when one completion signal exists and team is idle for more than 120s', async () => {
+  it('auto-disbands when one completion signal exists and the team is idle beyond the single-signal threshold', async () => {
     const team = makeTeam()
     const messages: EnsembleMessage[] = [
       ...fillerMessages(8),
-      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Task is done', timestamp: '2026-03-18T12:02:30.000Z' }),
-      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Still investigating', timestamp: '2026-03-18T12:02:40.000Z' }),
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Task is done', timestamp: '2026-03-18T11:56:30.000Z' }),
+      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Still investigating', timestamp: '2026-03-18T11:56:40.000Z' }),
     ]
 
     const { mod, appendedMessages } = await setupServiceWithMocks(team, messages)
@@ -459,8 +465,10 @@ describe('shouldAutoDisband() — tested via checkIdleTeams()', () => {
     const team = makeTeam()
     const messages: EnsembleMessage[] = [
       ...fillerMessages(8),
-      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Done', timestamp: '2026-03-18T12:02:30.000Z' }),
-      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Still working', timestamp: '2026-03-18T12:02:35.000Z' }),
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Done', timestamp: '2026-03-18T11:56:30.000Z' }),
+      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Still working', timestamp: '2026-03-18T11:56:35.000Z' }),
+      // Het ensemble-bericht is veel recenter: als dat als activiteit zou tellen,
+      // lijkt het team net gesproken te hebben en disbandt het niet.
       makeMessage({ from: 'ensemble', teamId: 'team-1', content: 'Agent joined', timestamp: '2026-03-18T12:04:55.000Z' }),
     ]
 
@@ -728,12 +736,19 @@ describe('worktree isolation lifecycle', () => {
     }))
     vi.doMock('../lib/agent-config', () => ({
       resolveAgentProgram: vi.fn(() => ({ readyMarker: '>', inputMethod: 'sendKeys' })),
+      resolveAgentProgramDetailed: vi.fn((program: string) => ({
+        agent: { command: program, readyMarker: '>', inputMethod: 'sendKeys' },
+        how: 'exact',
+        requested: program,
+      })),
+      availableAgentKeys: vi.fn(() => ['claude', 'codex']),
     }))
     vi.doMock('../lib/collab-paths', () => ({
       ensureCollabDirs: vi.fn(),
       collabPromptFile: vi.fn((teamId: string, agentName: string) => path.join(tempRoot, `${teamId}-${agentName}.prompt.txt`)),
       collabDeliveryFile: vi.fn((teamId: string, sessionName: string) => path.join(tempRoot, `${teamId}-${sessionName}.delivery.txt`)),
       collabSummaryFile: vi.fn((teamId: string) => path.join(tempRoot, `${teamId}.summary.txt`)),
+      collabMessagesFile: vi.fn((teamId: string) => path.join(tempRoot, `${teamId}.messages.jsonl`)),
       collabRuntimeDir: vi.fn((teamId: string) => path.join(tempRoot, teamId)),
       collabFinishedMarker: vi.fn((teamId: string) => path.join(tempRoot, `${teamId}.finished`)),
       collabBridgePosted: vi.fn((teamId: string) => path.join(tempRoot, `${teamId}.posted`)),
@@ -942,12 +957,19 @@ describe('staged workflow integration', () => {
     }))
     vi.doMock('../lib/agent-config', () => ({
       resolveAgentProgram: vi.fn(() => ({ readyMarker: '>', inputMethod: 'sendKeys' })),
+      resolveAgentProgramDetailed: vi.fn((program: string) => ({
+        agent: { command: program, readyMarker: '>', inputMethod: 'sendKeys' },
+        how: 'exact',
+        requested: program,
+      })),
+      availableAgentKeys: vi.fn(() => ['claude', 'codex']),
     }))
     vi.doMock('../lib/collab-paths', () => ({
       ensureCollabDirs: vi.fn(),
       collabPromptFile: vi.fn((teamId: string, agentName: string) => path.join(tempRoot, `${teamId}-${agentName}.prompt.txt`)),
       collabDeliveryFile: vi.fn((teamId: string, sessionName: string) => path.join(tempRoot, `${teamId}-${sessionName}.delivery.txt`)),
       collabSummaryFile: vi.fn((teamId: string) => path.join(tempRoot, `${teamId}.summary.txt`)),
+      collabMessagesFile: vi.fn((teamId: string) => path.join(tempRoot, `${teamId}.messages.jsonl`)),
       collabRuntimeDir: vi.fn((teamId: string) => path.join(tempRoot, teamId)),
       collabFinishedMarker: vi.fn((teamId: string) => path.join(tempRoot, `${teamId}.finished`)),
       collabBridgePosted: vi.fn((teamId: string) => path.join(tempRoot, `${teamId}.posted`)),
