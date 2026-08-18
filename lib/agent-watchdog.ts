@@ -7,7 +7,12 @@ import type { EnsembleMessage, EnsembleTeam } from '../types/ensemble'
 const DEFAULT_POLL_INTERVAL_MS = 30_000
 const DEFAULT_NUDGE_MS = 90_000
 const DEFAULT_STALL_MS = 180_000
-const WATCHDOG_NUDGE_TEXT = 'Are you still working? Share your progress with team-say.'
+/**
+ * Nudge text carries an explicit machine tag. An untagged "Are you still working?"
+ * landing in a session that never joined a team reads like the user asked it, which
+ * is how orphaned nudges ended up opening unrelated chat histories.
+ */
+const WATCHDOG_NUDGE_TEXT = '[ensemble watchdog] Are you still working? Share your progress with team-say.'
 
 /**
  * How many consecutive failed nudges before we conclude the agent is gone.
@@ -35,8 +40,8 @@ interface AgentWatchdogDeps {
   loadTeams: () => EnsembleTeam[]
   getMessages: (teamId: string) => EnsembleMessage[]
   appendMessage: (teamId: string, message: EnsembleMessage) => void
-  getRuntime: () => Pick<AgentRuntime, 'sendKeys' | 'pasteFromFile'>
-  resolveAgentProgram: (program: string) => { inputMethod: 'pasteFromFile' | 'sendKeys' }
+  getRuntime: () => Partial<Pick<AgentRuntime, 'capturePane'>> & Pick<AgentRuntime, 'sendKeys' | 'pasteFromFile'>
+  resolveAgentProgram: (program: string) => { inputMethod: 'pasteFromFile' | 'sendKeys'; readyMarker?: string }
   isSelf: (hostId?: string) => boolean
   getHostById: (hostId: string) => { url: string } | undefined
   postRemoteSessionCommand: (url: string, sessionName: string, text: string) => Promise<void>
@@ -141,6 +146,16 @@ export class AgentWatchdog {
       if (currentState.unreachableAt) continue
 
       if (!currentState.nudgedAt && idleMs >= this.nudgeAfterMs) {
+        // Gate 1: never nudge an agent we cannot prove is part of this run. Without
+        // it a nudge can land in a CLI that never received the task prompt and
+        // become the opening user turn of an unrelated session.
+        const hasSpoken = messages.some(message => message.from === agent.name)
+        if (!agent.promptInjectedAt && !hasSpoken) continue
+
+        // Gate 2: silence in the message log is not idleness — an agent can be deep
+        // in a long tool call. If the pane is mid-generation, leave it alone.
+        if (await this.isPaneBusy(team, agent.name, agent.program, agent.hostId)) continue
+
         try {
           await this.nudgeAgent(team, agent.name, agent.program, agent.hostId)
           this.state.set(stateKey, {
@@ -212,6 +227,27 @@ export class AgentWatchdog {
    * Hand it to the service so it can write a summary and disband, instead of
    * leaving it 'active' with a bridge polling a session that no longer exists.
    */
+  /**
+   * True when the agent's pane shows no ready prompt — the CLI is still generating
+   * or running a tool. Unknown (no capturePane, remote agent, or no readyMarker)
+   * counts as not busy, preserving previous behaviour.
+   */
+  private async isPaneBusy(
+    team: EnsembleTeam, agentName: string, program: string, hostId?: string,
+  ): Promise<boolean> {
+    if (hostId && !this.deps.isSelf(hostId)) return false
+    const capturePane = this.deps.getRuntime().capturePane
+    if (!capturePane) return false
+    const readyMarker = this.deps.resolveAgentProgram(program).readyMarker
+    if (!readyMarker) return false
+    try {
+      const pane = await capturePane(`${team.name}-${agentName}`, 30)
+      return !pane.includes(readyMarker)
+    } catch {
+      return false
+    }
+  }
+
   private async reportIfTeamUnreachable(team: EnsembleTeam): Promise<void> {
     if (!this.deps.onTeamUnreachable) return
     const activeAgents = team.agents.filter(candidate => candidate.status === 'active')

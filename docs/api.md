@@ -70,6 +70,23 @@ Returns `400` for malformed JSON, `429` for rate limit exceeded.
 
 ---
 
+### `POST /api/ensemble/teams/:id/pause` — Pause a team
+
+Tells every agent to finish the step it is on, post a status, and wait. A paused team is
+skipped by the idle checker and the watchdog.
+
+**Response:** `{ "team": EnsembleTeam }` with `status: "paused"`. Returns `409` if the
+team is not active.
+
+---
+
+### `POST /api/ensemble/teams/:id/resume` — Resume a paused team
+
+**Response:** `{ "team": EnsembleTeam }` with `status: "active"`. Returns `409` if the
+team is not paused.
+
+---
+
 ### `GET /api/ensemble/teams` — List teams
 
 ```bash

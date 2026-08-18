@@ -5,11 +5,12 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
+import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { getRuntime } from './agent-runtime'
 import { getSelfHostId } from './hosts-config'
-import { buildAgentCommandParts } from './agent-config'
+import { buildAgentCommandParts, resolveAgentProgram } from './agent-config'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '..')
@@ -21,6 +22,10 @@ export interface SpawnedAgent {
   sessionName: string
   workingDirectory: string
   hostId: string
+  /** Pinned conversation UUID, when the program supports sessionIdFlag */
+  sessionUuid?: string
+  /** Resolved transcript file for this agent, when the program exposes one */
+  transcriptPath?: string
 }
 
 interface SpawnAgentOptions {
@@ -28,6 +33,12 @@ interface SpawnAgentOptions {
   program: string
   workingDirectory: string
   hostId?: string
+  /**
+   * Collab protocol (role, communication rules, done protocol). Passed as a system
+   * prompt when the program supports it, so it never appears as a user turn in the
+   * agent's chat history.
+   */
+  systemPromptFile?: string
 }
 
 /** Compute tmux session name from agent name */
@@ -39,20 +50,56 @@ function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
+/**
+ * Resolve where a program will persist this conversation, so it can be archived on
+ * disband instead of lingering in the user's session history.
+ * {cwdSlug} follows Claude Code's ~/.claude/projects naming (non-alphanumerics → "-").
+ */
+export function resolveTranscriptPath(
+  template: string, sessionId: string, cwd: string,
+): string {
+  const cwdSlug = cwd.replace(/[^a-zA-Z0-9]/g, '-')
+  const expanded = template
+    .replace('{sessionId}', sessionId)
+    .replace('{cwdSlug}', cwdSlug)
+  return expanded.startsWith('~')
+    ? path.join(process.env.HOME || '', expanded.slice(1))
+    : expanded
+}
+
 /** Resolve program name to CLI command, adding runtime flags for cwd handling */
-function resolveStartCommand(program: string, cwd: string): string {
+function resolveStartCommand(
+  program: string,
+  cwd: string,
+  extras: { systemPromptFile?: string; sessionUuid?: string } = {},
+): string {
   const parts = buildAgentCommandParts(program)
-  const normalized = program.toLowerCase()
+  const agentConfig = resolveAgentProgram(program)
+  // Match on the actual binary, not the program name: an "ollama-claude" agent runs
+  // `ollama launch claude`, and ollama rejects claude's own flags as unknown.
+  const binary = agentConfig.command.toLowerCase()
+
+  // Carry the collab protocol as a system prompt where supported. Agents that
+  // don't support it still receive it inline (see ensemble-service prompt build).
+  if (extras.systemPromptFile && agentConfig.systemPromptFileFlag
+    && !parts.includes(agentConfig.systemPromptFileFlag)) {
+    parts.push(agentConfig.systemPromptFileFlag, extras.systemPromptFile)
+  }
+
+  if (extras.sessionUuid && agentConfig.sessionIdFlag
+    && !parts.includes(agentConfig.sessionIdFlag)) {
+    parts.push(agentConfig.sessionIdFlag, extras.sessionUuid)
+  }
 
   if (
-    normalized.includes('codex')
+    binary === 'codex'
     && !parts.some(p => p === '-C' || p === '--cd' || p.startsWith('--cd='))
   ) {
     parts.push('--cd', cwd)
   }
 
   if (
-    normalized.includes('claude')
+    binary === 'claude'
     && cwd !== REPO_ROOT
     && !parts.some(p => p === '--add-dir' || p.startsWith('--add-dir='))
   ) {
@@ -71,6 +118,13 @@ export async function spawnLocalAgent(options: SpawnAgentOptions): Promise<Spawn
   const sessionName = computeSessionName(options.name)
   const cwd = options.workingDirectory || process.cwd()
   const hostId = options.hostId || getSelfHostId()
+  const agentConfig = resolveAgentProgram(options.program)
+
+  // Pin the conversation id up front so the transcript is identifiable later.
+  const sessionUuid = agentConfig.sessionIdFlag ? uuidv4() : undefined
+  const transcriptPath = sessionUuid && agentConfig.transcriptPathTemplate
+    ? resolveTranscriptPath(agentConfig.transcriptPathTemplate, sessionUuid, cwd)
+    : undefined
 
   // Create tmux session
   await runtime.createSession(sessionName, cwd)
@@ -79,7 +133,10 @@ export async function spawnLocalAgent(options: SpawnAgentOptions): Promise<Spawn
   await new Promise(r => setTimeout(r, 300))
 
   // Start the AI program
-  const startCommand = resolveStartCommand(options.program, cwd)
+  const startCommand = resolveStartCommand(options.program, cwd, {
+    systemPromptFile: options.systemPromptFile,
+    sessionUuid,
+  })
 
   // Forward ENSEMBLE_* and agent-specific env vars to tmux session
   const envForward = Object.entries(process.env)
@@ -101,6 +158,28 @@ export async function spawnLocalAgent(options: SpawnAgentOptions): Promise<Spawn
     sessionName,
     workingDirectory: cwd,
     hostId,
+    sessionUuid,
+    transcriptPath,
+  }
+}
+
+/**
+ * Move an agent's transcript out of the user's session history into the ensemble
+ * archive. Collab transcripts otherwise sit next to the user's own conversations,
+ * where scripted orchestration text reads like something the user asked.
+ * Archived, never deleted — the work inside is real.
+ */
+export function archiveAgentTranscript(
+  transcriptPath: string, archiveDir: string,
+): { archived: boolean; to?: string; reason?: string } {
+  try {
+    if (!fs.existsSync(transcriptPath)) return { archived: false, reason: 'no transcript found' }
+    fs.mkdirSync(archiveDir, { recursive: true })
+    const target = path.join(archiveDir, path.basename(transcriptPath))
+    fs.renameSync(transcriptPath, target)
+    return { archived: true, to: target }
+  } catch (err) {
+    return { archived: false, reason: err instanceof Error ? err.message : String(err) }
   }
 }
 

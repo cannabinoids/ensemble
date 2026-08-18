@@ -137,20 +137,44 @@ async function cmdTeams() {
   }
 }
 
-async function cmdSteer(teamId: string, message: string) {
+async function cmdSteer(teamId: string, message: string, to = 'team') {
   try {
     await apiPost(`/api/ensemble/teams/${teamId}`, {
       from: 'user',
-      to: 'team',
+      to,
       content: message,
     })
-    console.log(`${c.bGreen}✓${c.r} Message sent to team`)
+    const target = to === 'team' ? 'team' : to
+    console.log(`${c.bGreen}✓${c.r} Interjection delivered to ${target}`)
+    console.log(`  ${c.dim}Agents are told to reply with "ack: ..." before continuing.${c.r}`)
   } catch {
     console.log(`${c.red}✗${c.r} Failed to send message`)
   }
 }
 
-async function cmdRun(task: string, agentFlags: string | undefined, timeoutSec: number) {
+async function cmdPause(teamId: string, paused: boolean) {
+  const verb = paused ? 'pause' : 'resume'
+  try {
+    const result = await apiPost(`/api/ensemble/teams/${teamId}/${verb}`, {}) as { error?: string }
+    if (result?.error) {
+      console.log(`${c.red}✗${c.r} ${result.error}`)
+      return
+    }
+    console.log(paused
+      ? `${c.bYellow}⏸${c.r} Team paused — agents finish the step they are on, then wait.`
+      : `${c.bGreen}▶${c.r} Team resumed.`)
+  } catch {
+    console.log(`${c.red}✗${c.r} Failed to ${verb} team`)
+  }
+}
+
+async function cmdRun(
+  task: string,
+  agentFlags: string | undefined,
+  timeoutSec: number,
+  templateName?: string,
+  roleFlags?: string,
+) {
   const cwd = process.cwd()
 
   // 1. Ensure server is running
@@ -173,13 +197,16 @@ async function cmdRun(task: string, agentFlags: string | undefined, timeoutSec: 
     }
   }
 
-  // 2. Parse agents (default: codex + claude)
+  // 2. Parse agents (default: codex + claude) and roles.
+  // Roles positionally match agents; anything unspecified falls back to
+  // lead for the first agent and worker for the rest.
   const agentNames = agentFlags
     ? agentFlags.split(',').map(s => s.trim())
     : ['codex', 'claude code']
+  const roleNames = roleFlags ? roleFlags.split(',').map(s => s.trim()) : []
   const agents = agentNames.map((name, i) => ({
     program: name,
-    role: i === 0 ? 'lead' : 'worker',
+    role: roleNames[i] || (i === 0 ? 'lead' : 'worker'),
     hostId: 'local',
   }))
 
@@ -191,6 +218,7 @@ async function cmdRun(task: string, agentFlags: string | undefined, timeoutSec: 
     agents,
     feedMode: 'live',
     workingDirectory: cwd,
+    ...(templateName ? { templateName } : {}),
   }) as { team: { id: string } }
 
   const teamId = result.team.id
@@ -272,30 +300,52 @@ switch (cmd) {
   case 'run': {
     const runArgs = [...args]
     let agentList: string | undefined
+    let templateName: string | undefined
+    let roleList: string | undefined
     let timeout = 600
-    // Parse --agents and --timeout flags
+    // Parse --agents, --template, --roles and --timeout flags
     for (let i = 0; i < runArgs.length; i++) {
       if (runArgs[i] === '--agents' && runArgs[i + 1]) {
         agentList = runArgs.splice(i, 2)[1]; i--
+      } else if (runArgs[i] === '--template' && runArgs[i + 1]) {
+        templateName = runArgs.splice(i, 2)[1]; i--
+      } else if (runArgs[i] === '--roles' && runArgs[i + 1]) {
+        roleList = runArgs.splice(i, 2)[1]; i--
       } else if (runArgs[i] === '--timeout' && runArgs[i + 1]) {
         timeout = parseInt(runArgs.splice(i, 2)[1], 10); i--
       }
     }
     const taskDesc = runArgs.join(' ')
     if (!taskDesc) {
-      console.log(`Usage: ensemble run "task description" [--agents codex,claude] [--timeout 600]`)
+      console.log(`Usage: ensemble run "task description" [--agents codex,claude] [--template trinity] [--roles lead,critic] [--timeout 600]`)
       process.exit(1)
     }
-    await cmdRun(taskDesc, agentList, timeout)
+    await cmdRun(taskDesc, agentList, timeout, templateName, roleList)
     break
   }
   case 'steer':
-  case 'send':
-    if (args.length < 2) {
-      console.log(`Usage: ensemble steer <team-id> <message>`)
+  case 'send': {
+    const steerArgs = [...args]
+    let target = 'team'
+    for (let i = 0; i < steerArgs.length; i++) {
+      if (steerArgs[i] === '--to' && steerArgs[i + 1]) {
+        target = steerArgs.splice(i, 2)[1]; i--
+      }
+    }
+    if (steerArgs.length < 2) {
+      console.log(`Usage: ensemble steer <team-id> [--to <agent>] <message>`)
       process.exit(1)
     }
-    await cmdSteer(args[0], args.slice(1).join(' '))
+    await cmdSteer(steerArgs[0], steerArgs.slice(1).join(' '), target)
+    break
+  }
+  case 'pause':
+  case 'resume':
+    if (args.length < 1) {
+      console.log(`Usage: ensemble ${cmd} <team-id>`)
+      process.exit(1)
+    }
+    await cmdPause(args[0], cmd === 'pause')
     break
   case 'start':
   case 'server': {
@@ -325,22 +375,27 @@ switch (cmd) {
     ${c.bWhite}run${c.r} "task" [--agents ..]   Run headless (auto-starts server)
     ${c.bWhite}monitor${c.r} [--latest | id]   Watch team collaboration live
     ${c.bWhite}teams${c.r}                      List all teams
-    ${c.bWhite}steer${c.r} <id> <message>       Send steering message to team
+    ${c.bWhite}steer${c.r} <id> [--to a] <msg>  Interject — overrides the agents' current plan
+    ${c.bWhite}pause${c.r} <id>                  Tell the team to stand down and wait
+    ${c.bWhite}resume${c.r} <id>                 Release a paused team
     ${c.bWhite}status${c.r}                     Server health & overview
 
   ${c.bold}Monitor keybindings:${c.r}
     ${c.bWhite}s${c.r}       Steer entire team
-    ${c.bWhite}1-4${c.r}     Steer specific agent
+    ${c.bWhite}1-9${c.r}     Steer specific agent
+    ${c.bWhite}p${c.r}       Pause / resume the team
     ${c.bWhite}j/k${c.r}     Scroll up/down
     ${c.bWhite}d${c.r}       Disband team
     ${c.bWhite}q${c.r}       Quit
 
   ${c.bold}Examples:${c.r}
     ${c.dim}ensemble run "refactor auth module" --agents gemini,claude${c.r}
-    ${c.dim}ensemble run "fix all lint errors" --timeout 300${c.r}
+    ${c.dim}ensemble run "build the retry layer" --agents codex,claude,gemini --template trinity${c.r}
+    ${c.dim}ensemble run "audit auth" --agents codex,claude --roles lead,critic${c.r}
     ${c.dim}ensemble monitor --latest${c.r}
     ${c.dim}ensemble steer abc123 "focus on security review"${c.r}
-    ${c.dim}ensemble teams${c.r}
+    ${c.dim}ensemble steer abc123 --to claude-2 "you take the tests"${c.r}
+    ${c.dim}ensemble pause abc123${c.r}
 `)
     break
   default:

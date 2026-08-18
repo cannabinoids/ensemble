@@ -32,6 +32,9 @@ AGENTS="${3:-${COLLAB_AGENTS:-}}"
 # Optional collab template key from collab-templates.json (review|implement|research|debug).
 # Assigns explicit roles to each agent instead of the generic lead/worker prompt.
 TEMPLATE="${4:-${COLLAB_TEMPLATE:-}}"
+# Roles match the agent list positionally (lead,worker,critic). Also settable via
+# COLLAB_ROLES. Empty = lead for the first agent, worker for the rest.
+ROLES="${5:-${COLLAB_ROLES:-}}"
 
 # ─── Auto-fallback to codex-only when claude auth is dead (set by preflight) ───
 # Preflight writes /tmp/collab-agents-override.txt when claude tmux-probe failed.
@@ -83,14 +86,19 @@ fi
 # ─── 2. Create team (use env vars to avoid quoting hell) ───
 TEAM_NAME="collab-$(python3 -c 'import random,time; print(str(time.time_ns()//1000000)+"-"+str(random.randint(1000,9999)))')"
 PAYLOAD_FILE=$(mktemp)
-TNAME="$TEAM_NAME" TDESC="$TASK" TCWD="$CWD" THOST="$HOST_ID" TAGENTS="$AGENTS" TTEMPLATE="$TEMPLATE" PFILE="$PAYLOAD_FILE" python3 -c "
+TNAME="$TEAM_NAME" TDESC="$TASK" TCWD="$CWD" THOST="$HOST_ID" TAGENTS="$AGENTS" TTEMPLATE="$TEMPLATE" TROLES="$ROLES" PFILE="$PAYLOAD_FILE" python3 -c "
 import json, os
 agents_str = os.environ.get('TAGENTS', '')
 if agents_str:
     names = [a.strip() for a in agents_str.split(',')]
-    agents = [{'program': names[0], 'role': 'lead', 'hostId': os.environ['THOST']}]
-    for n in names[1:]:
-        agents.append({'program': n, 'role': 'worker', 'hostId': os.environ['THOST']})
+    roles = [r.strip() for r in os.environ.get('TROLES', '').split(',') if r.strip()]
+    def role_for(i):
+        if i < len(roles):
+            return roles[i]
+        return 'lead' if i == 0 else 'worker'
+    agents = [{'program': names[0], 'role': role_for(0), 'hostId': os.environ['THOST']}]
+    for i, n in enumerate(names[1:]):
+        agents.append({'program': n, 'role': role_for(i + 1), 'hostId': os.environ['THOST']})
 else:
     agents = [
         {'program': 'codex', 'role': 'lead', 'hostId': os.environ['THOST']},
@@ -302,6 +310,7 @@ else
   echo -e "  ${D}│${R}  ${D}tmux attach -t $MONITOR_SESSION${R}      ${D}│${R}"
 fi
 echo -e "  ${D}│${R}  ${W}s${R}     ${D}steer team${R}                     ${D}│${R}"
+echo -e "  ${D}│${R}  ${W}p${R}     ${D}pause / resume team${R}            ${D}│${R}"
 python3 - "$STEER_KEYS" "$STEER_TEXT" <<'PY'
 import sys
 keys, text = sys.argv[1], sys.argv[2]

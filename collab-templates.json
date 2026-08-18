@@ -59,6 +59,25 @@
           "focus": "Analyze the root cause of the bug. Read relevant code paths, trace the execution flow, identify where the logic breaks down. Propose and implement a fix once the reproducer confirms the bug."
         }
       ]
+    },
+    "trinity": {
+      "name": "Trinity",
+      "description": "Three-agent team: architect plans, developer implements, critic challenges both.",
+      "suggestedTaskPrefix": "Build the following:",
+      "roles": [
+        {
+          "role": "ARCHITECT",
+          "focus": "Own the high-level design and task breakdown. Share a concrete plan before any code is written. Review the developer's output for correctness and design alignment. Coordinate with the critic's findings to course-correct early."
+        },
+        {
+          "role": "DEVELOPER",
+          "focus": "Implement based on the architect's plan. Write code, run tests, and report progress after each step. Surface blockers immediately. Incorporate the critic's feedback into your implementation."
+        },
+        {
+          "role": "CRITIC",
+          "focus": "Challenge both the architect's plan and the developer's implementation. Hunt for edge cases, security issues, performance problems, and faulty assumptions. Do not simply agree — your value is in the quality of your pushback. Propose concrete fixes when you find problems."
+        }
+      ]
     }
   }
 }

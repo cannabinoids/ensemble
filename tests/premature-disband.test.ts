@@ -60,3 +60,32 @@ it('idle thresholds leave room for an agent that is reading', () => {
   )
 })
 })
+
+// A message about the orchestration is not a message about the agent. Seen on a
+// review task pointed at scripts/collab-poll.sh: both agents quoted its own
+// ---STATUS:{ACTIVE,QUIET,DONE,WAITING} sentinel, and the run ended mid-analysis.
+describe('describing the machinery is not finishing', () => {
+  it('quoting the DONE sentinel of a script under review is not an ending', () => {
+    assert.strictEqual(
+      hasCompletionSignal('collab-poll.sh emits TSV lines terminated by a ---STATUS:{ACTIVE,QUIET,DONE,WAITING} sentinel'),
+      false,
+    )
+  })
+
+  it('talking about the DONE protocol is not an ending', () => {
+    assert.strictEqual(hasCompletionSignal('I will follow the DONE protocol once we agree'), false)
+  })
+
+  it('announcing a team-say is not an ending', () => {
+    assert.strictEqual(hasCompletionSignal('I will send the done sentinel via team-say when you agree'), false)
+  })
+
+  it('a long analysis that merely contains finishing words is not an ending', () => {
+    const analysis = 'Exchange 2: the two scripts disagree about what finished means, and the cursor is done differently in each. '.padEnd(600, 'x')
+    assert.strictEqual(hasCompletionSignal(analysis), false)
+  })
+
+  it('but a short genuine sign-off still counts', () => {
+    assert.strictEqual(hasCompletionSignal('Ik ben klaar'), true)
+  })
+})

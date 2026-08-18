@@ -179,3 +179,105 @@ describe('AgentWatchdog', () => {
     expect(getWatchdogStallMs()).toBe(5678)
   })
 })
+
+/**
+ * Which agents may be nudged at all.
+ *
+ * The failed-nudge ceiling above stops retrying a session that has gone away. These
+ * two gates decide whether a nudge should be attempted in the first place: an agent
+ * that never received the task prompt is not a participant, and message silence is
+ * not the same as an idle agent.
+ */
+describe('AgentWatchdog — nudge eligibility', () => {
+  let nowMs: number
+  let teams: EnsembleTeam[]
+  let messages: EnsembleMessage[]
+  let appended: EnsembleMessage[]
+  let sendKeys: ReturnType<typeof vi.fn>
+  let pasteFromFile: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    nowMs = new Date('2026-03-19T10:00:00.000Z').getTime()
+    teams = [makeTeam()]
+    messages = []
+    appended = []
+    sendKeys = vi.fn(async () => {})
+    pasteFromFile = vi.fn(async () => {})
+  })
+
+  function watchdogWith(paneOutput?: string) {
+    return new AgentWatchdog({
+      loadTeams: () => teams,
+      getMessages: () => messages,
+      appendMessage: (_teamId, message) => appended.push(message),
+      getRuntime: () => (paneOutput === undefined
+        ? { sendKeys, pasteFromFile }
+        : { sendKeys, pasteFromFile, capturePane: vi.fn(async () => paneOutput) }),
+      resolveAgentProgram: () => ({ inputMethod: 'sendKeys', readyMarker: '›' }),
+      isSelf: () => true,
+      getHostById: () => undefined,
+      postRemoteSessionCommand: vi.fn(async () => {}),
+      collabDeliveryFile: (teamId, sessionName) => `/tmp/${teamId}/${sessionName}.txt`,
+      now: () => nowMs,
+      pollIntervalMs: 60_000,
+      nudgeAfterMs: 90_000,
+      stallAfterMs: 180_000,
+    })
+  }
+
+  it('does not nudge an agent that never received a prompt and never spoke', async () => {
+    const watchdog = watchdogWith()
+    await watchdog.poll()
+    nowMs += 91_000
+    await watchdog.poll()
+
+    expect(pasteFromFile).not.toHaveBeenCalled()
+    watchdog.stop()
+  })
+
+  it('nudges an agent that never spoke once its prompt injection is recorded', async () => {
+    teams = [makeTeam({
+      agents: [{
+        agentId: 'agent-1', name: 'codex-1', program: 'codex', role: 'lead',
+        hostId: 'local', status: 'active',
+        promptInjectedAt: '2026-03-19T10:00:00.000Z',
+      }],
+    })]
+    const watchdog = watchdogWith()
+    await watchdog.poll()
+    nowMs += 91_000
+    await watchdog.poll()
+
+    expect(pasteFromFile).toHaveBeenCalledTimes(1)
+    watchdog.stop()
+  })
+
+  it('skips the nudge while the pane is mid-generation', async () => {
+    messages = [{
+      id: 'm1', teamId: 'team-1', from: 'codex-1', to: 'team',
+      content: 'working on it', type: 'chat', timestamp: '2026-03-19T10:00:00.000Z',
+    }]
+    const watchdog = watchdogWith('running tests...')
+    await watchdog.poll()
+    nowMs += 91_000
+    await watchdog.poll()
+
+    expect(pasteFromFile).not.toHaveBeenCalled()
+    watchdog.stop()
+  })
+
+  it('nudges once the pane shows its ready marker again', async () => {
+    messages = [{
+      id: 'm1', teamId: 'team-1', from: 'codex-1', to: 'team',
+      content: 'working on it', type: 'chat', timestamp: '2026-03-19T10:00:00.000Z',
+    }]
+    const watchdog = watchdogWith('all done\n› ')
+    await watchdog.poll()
+    nowMs += 91_000
+    await watchdog.poll()
+
+    expect(pasteFromFile).toHaveBeenCalledTimes(1)
+    expect(appended[0].content).toContain('[ensemble watchdog]')
+    watchdog.stop()
+  })
+})

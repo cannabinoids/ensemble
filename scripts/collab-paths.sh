@@ -42,6 +42,18 @@ collab_prompt_file() {
   printf '%s/prompts/%s.txt\n' "$(collab_runtime_dir "$team_id")" "$agent_name"
 }
 
+collab_system_prompt_file() {
+  local team_id="${1:?team id required}"
+  local agent_name="${2:?agent name required}"
+  printf '%s/prompts/%s.system.txt\n' "$(collab_runtime_dir "$team_id")" "$agent_name"
+}
+
+collab_inbox_file() {
+  local team_id="${1:?team id required}"
+  local agent_name="${2:?agent name required}"
+  printf '%s/inbox/%s.md\n' "$(collab_runtime_dir "$team_id")" "$agent_name"
+}
+
 collab_delivery_file() {
   local team_id="${1:?team id required}"
   local session_name="${2:?session name required}"

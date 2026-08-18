@@ -15,7 +15,10 @@
     "readyMarker": "❯",
     "inputMethod": "sendKeys",
     "color": "green",
-    "icon": "●"
+    "icon": "●",
+    "systemPromptFileFlag": "--append-system-prompt-file",
+    "sessionIdFlag": "--session-id",
+    "transcriptPathTemplate": "~/.claude/projects/{cwdSlug}/{sessionId}.jsonl"
   },
   "gemini": {
     "name": "gemini",
@@ -52,5 +55,32 @@
     "inputMethod": "sendKeys",
     "color": "magenta",
     "icon": "◈"
+  },
+  "ollama": {
+    "name": "ollama",
+    "command": "ollama",
+    "flags": ["launch", "opencode", "--model", "minimax-m3:cloud"],
+    "readyMarker": "Ask anything",
+    "inputMethod": "sendKeys",
+    "color": "white",
+    "icon": "◉"
+  },
+  "ollama-claude": {
+    "name": "ollama-claude",
+    "command": "ollama",
+    "flags": ["launch", "claude", "--model", "minimax-m3:cloud"],
+    "readyMarker": "❯",
+    "inputMethod": "sendKeys",
+    "color": "white",
+    "icon": "◉"
+  },
+  "ollama-codex": {
+    "name": "ollama-codex",
+    "command": "ollama",
+    "flags": ["launch", "codex", "--model", "minimax-m3:cloud"],
+    "readyMarker": "›",
+    "inputMethod": "pasteFromFile",
+    "color": "white",
+    "icon": "◉"
   }
 }

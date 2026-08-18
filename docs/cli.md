@@ -24,6 +24,8 @@ ensemble <command>
 | `monitor [teamId]` | Open TUI monitor |
 | `monitor --latest` | Monitor most recent team |
 | `steer <teamId> "msg"` | Send steering message to team |
+| `pause <teamId>` | Tell the team to stand down after the current step |
+| `resume <teamId>` | Release a paused team |
 | `help` | Show help |
 
 ### Examples
@@ -86,4 +88,20 @@ npm run build     # TypeScript typecheck (no emit)
 npm run lint      # ESLint
 npm run monitor   # Open TUI monitor for latest team
 npm run cli       # Run ensemble CLI
+```
+
+## Interjections
+
+`steer` is the supported way to talk to a running team — never paste into agent panes
+directly. Each interjection is appended to the recipient's inbox
+(`/tmp/ensemble/<teamId>/inbox/<agent>.md`) *and* pasted into its pane once the pane
+goes idle, so it survives a paste that would otherwise land mid-tool-call. Agents treat
+`user` messages as outranking their teammates and their current plan, and reply with
+`ack: <what changed>` before continuing.
+
+```bash
+ensemble steer abc-123 "focus on the retry path"
+ensemble steer abc-123 --to claude-2 "you take the tests"
+ensemble pause abc-123
+ensemble resume abc-123
 ```

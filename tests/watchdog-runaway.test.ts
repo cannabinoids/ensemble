@@ -30,6 +30,11 @@ function makeTeam(agentNames: string[]): EnsembleTeam {
       program: 'claude',
       role: i === 0 ? 'lead' : 'worker',
       status: 'active',
+      // The watchdog only nudges agents whose task prompt was actually delivered,
+      // so an orphaned pane that never joined the team cannot be nudged into
+      // becoming the opening turn of an unrelated session. A spawned agent whose
+      // session later vanished — the case this file covers — has this set.
+      promptInjectedAt: '2026-08-14T10:00:00.000Z',
     })),
   } as unknown as EnsembleTeam
 }

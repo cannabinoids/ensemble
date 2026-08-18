@@ -59,6 +59,19 @@ warn() {
 
 echo -e "${BD}collab preflight${R}"
 
+# ─── 0. API keys in the environment ───
+# Agents run on the CLIs' own subscription logins. Any ANTHROPIC_*/OPENAI_* key
+# exported here is forwarded into the agent panes by the spawner, where the CLI may
+# prefer it over the subscription and bill per token — for every message the agents
+# exchange. A cost issue, not a correctness one, so warn rather than fail.
+for key_var in ANTHROPIC_API_KEY OPENAI_API_KEY; do
+  if [ -n "${!key_var:-}" ]; then
+    warn "$key_var is set and will be forwarded to the agents"
+    warn "  This can switch them from subscription auth to metered API billing."
+    warn "  Fix: unset $key_var (or launch from a shell without it)"
+  fi
+done
+
 # ─── 1. Ensemble service ───
 if ! curl -sf "$API/api/v1/health" > /dev/null 2>&1; then
   fail 1 "Ensemble service NOT running on $API

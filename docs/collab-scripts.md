@@ -251,3 +251,33 @@ python3 scripts/parse-messages.py <file> [options]
 | `--max-content N` | Truncate content to N chars (default: 500) |
 | `--include-ensemble` | Include ensemble system messages |
 | `--meta-only` | Output metadata (count, timestamps) instead of messages |
+
+---
+
+## collab-archive-transcripts.sh
+
+**Moves ensemble agent transcripts out of the user's Claude Code session history.**
+Runs archive themselves on disband when the agent program pins a session id; this
+handles transcripts from before that, identified by the orchestration text ensemble
+injects as the first user message.
+
+```bash
+./scripts/collab-archive-transcripts.sh          # dry run
+./scripts/collab-archive-transcripts.sh --force  # archive them
+```
+
+Files move to `~/.ensemble/transcripts/legacy/<project>/`. Nothing is deleted, and a
+real conversation that merely mentions `team-say` is never matched — only transcripts
+whose *first* user message is injected text.
+
+---
+
+## fork-status.sh
+
+**Reports what upstream has done since this fork branched.** Run it before starting
+work: it lists the upstream commits this branch lacks and flags every file both sides
+have touched, so a fix is not written twice.
+
+```bash
+./scripts/fork-status.sh
+```

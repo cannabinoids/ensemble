@@ -6,8 +6,9 @@
 import http from 'http'
 import {
   createEnsembleTeam, getEnsembleTeam, listEnsembleTeams,
-  getTeamFeed, sendTeamMessage, disbandTeam,
+  getTeamFeed, sendTeamMessage, disbandTeam, setTeamPaused,
 } from './services/ensemble-service'
+import { messageEvents } from './lib/ensemble-registry'
 
 const PORT = parseInt(process.env.ENSEMBLE_PORT || process.env.ORCHESTRA_PORT || '23000', 10)
 const HOST = process.env.ENSEMBLE_HOST || '127.0.0.1'
@@ -187,6 +188,14 @@ const server = http.createServer(async (req, res) => {
       return json(res, result.data, result.status, origin)
     }
 
+    // Pause / resume: /api/ensemble/teams/:id/pause | /resume
+    const pauseMatch = path.match(/^\/api\/ensemble\/teams\/([^/]+)\/(pause|resume)$/)
+    if (pauseMatch && method === 'POST') {
+      const result = await setTeamPaused(pauseMatch[1], pauseMatch[2] === 'pause')
+      if (result.error) return json(res, { error: result.error }, result.status, origin)
+      return json(res, result.data, result.status, origin)
+    }
+
     // Feed: /api/ensemble/teams/:id/feed
     const feedMatch = path.match(/^\/api\/ensemble\/teams\/([^/]+)\/feed$/)
     if (feedMatch && method === 'GET') {
@@ -194,6 +203,33 @@ const server = http.createServer(async (req, res) => {
       const result = getTeamFeed(feedMatch[1], since)
       if (result.error) return json(res, { error: result.error }, result.status, origin)
       return json(res, result.data, result.status, origin)
+    }
+
+    // SSE: /api/ensemble/teams/:id/events
+    const eventsMatch = path.match(/^\/api\/ensemble\/teams\/([^/]+)\/events$/)
+    if (eventsMatch && method === 'GET') {
+      const teamId = eventsMatch[1]
+      const allowedOrigin = origin && isAllowedOrigin(origin) ? origin : 'http://localhost'
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': allowedOrigin,
+      })
+      res.write(`event: connected\ndata: ${JSON.stringify({ teamId })}\n\n`)
+
+      const onMessage = (message: unknown) => {
+        res.write(`event: message\ndata: ${JSON.stringify(message)}\n\n`)
+      }
+      messageEvents.on(`message:${teamId}`, onMessage)
+
+      const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 15_000)
+
+      req.on('close', () => {
+        clearInterval(heartbeat)
+        messageEvents.off(`message:${teamId}`, onMessage)
+      })
+      return
     }
 
     json(res, { error: 'Not found' }, 404, origin)

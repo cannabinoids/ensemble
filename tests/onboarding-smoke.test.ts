@@ -175,5 +175,7 @@ describe('onboarding smoke test', () => {
     expect(teamsAfterOutput).toContain('my-first-team')
     expect(teamsAfterOutput).toContain('codex-1')
     expect(teamsAfterOutput).toContain('claude-2')
-  })
+    // Boots the server and shells out to the CLI three times, each paying tsx
+    // startup — more than vitest's default 5s allows on a slower machine.
+  }, 45_000)
 })

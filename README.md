@@ -101,6 +101,7 @@ The default team is **Codex (lead) + Claude Code (worker)**. This is the tested,
 | **Grok CLI** | Tested in three-agent teams | Add explicitly (see below) |
 | **Gemini CLI** | Experimental | Add explicitly (see below) |
 | **Aider** | Untested | Add explicitly (see below) |
+| **Ollama-backed agents** | Experimental | `ollama`, `ollama-claude`, `ollama-codex` (see note) |
 | **Any CLI tool** | Via `agents.json` | [Add a custom agent](https://michelhelsdingen.github.io/ensemble/configuration#adding-a-custom-agent) |
 
 ### Using a different team composition
@@ -147,6 +148,13 @@ curl -X POST http://localhost:23000/api/ensemble/teams \
 
 > **Note on Gemini:** Gemini CLI can join teams and send messages, but is experimental. It may stop responding due to free-tier rate limits or internal agent delegation issues in Gemini's TUI. For best results, configure a paid API key via `gemini /auth`.
 
+> **Note on Ollama:** an agent must be able to run shell commands, because that is how
+> it calls `team-say`/`team-read`. `ollama run <model>` is a plain chat REPL with no tool
+> calling, so it cannot join a team. `ollama launch <integration>` can — it starts a real
+> agent harness (opencode, claude, codex, …) backed by an Ollama model, which is what the
+> shipped `ollama*` entries use. The `--model` flag is required; without it the launcher
+> opens an interactive picker and agent startup hangs.
+
 ## How It Works
 
 1. **Create a team**: define agents and their task via API or CLI
@@ -180,6 +188,50 @@ Override with env vars:
 
 On macOS, you never need `tmux attach` for the monitor.
 
+## Cost model — no API keys
+
+Ensemble makes **no LLM API calls of its own**. It is orchestration: tmux sessions, a
+message bus, and a monitor. Every token is spent by the agent CLIs themselves,
+authenticated the way you already use them interactively — a Claude subscription login,
+a ChatGPT login for Codex. Preflight checks exactly that, and there is no API-key
+setting anywhere in `.env.example`, because none is needed.
+
+The practical effect: a multi-agent run costs what your existing plans already cover,
+rather than metered per-token billing for every message agents exchange — and agents
+exchange a lot of them.
+
+> **One caveat:** the spawner forwards `ANTHROPIC_*`, `OPENAI_*` and `NVIDIA_*`
+> environment variables into each agent pane. If `ANTHROPIC_API_KEY` or
+> `OPENAI_API_KEY` is exported in the shell you launch from, the CLIs may prefer it
+> over your subscription and bill per token. Preflight warns when it sees one.
+
+## Interjection — steering a live team
+
+`ensemble steer` is the supported way to talk to a running team; never paste into agent
+panes directly.
+
+```bash
+npx ensemble steer <team-id> "focus on the retry path"      # whole team
+npx ensemble steer <team-id> --to claude-2 "you take tests"  # one agent
+npx ensemble pause <team-id>                                 # stand down after the current step
+npx ensemble resume <team-id>
+```
+
+Each interjection is appended to the recipient's inbox
+(`/tmp/ensemble/<team-id>/inbox/<agent>.md`) *and* pasted into its pane once the pane
+goes idle, so it survives a paste that would otherwise land mid-tool-call. Agents are
+told user messages outrank their teammates and their current plan, and asked to reply
+`ack: <what changed>` before continuing.
+
+### Agent transcripts
+
+Claude agents spawn with a pinned `--session-id`, and the collab protocol is passed via
+`--append-system-prompt-file` rather than typed in as a first message. Orchestration
+text therefore never appears as something you appear to have asked, and on disband each
+agent transcript moves to `~/.ensemble/transcripts/<team-id>/` instead of sitting in
+your own session history. Set `ENSEMBLE_ARCHIVE_TRANSCRIPTS=0` to keep them in place.
+For transcripts from older runs: `./scripts/collab-archive-transcripts.sh --force`.
+
 ## Configuration
 
 Copy `.env.example` to `.env` and adjust as needed. Key variables:
@@ -201,6 +253,14 @@ See [full configuration docs](https://michelhelsdingen.github.io/ensemble/config
 - [CLI Reference](https://michelhelsdingen.github.io/ensemble/cli) — Commands and monitor keybindings
 - [Collab Scripts](https://michelhelsdingen.github.io/ensemble/collab-scripts) — Shell scripts for automation
 - [Architecture](https://michelhelsdingen.github.io/ensemble/architecture) — How it all fits together
+
+## Credits
+
+Ensemble was created by **[Michel Helsdingen](https://github.com/michelhelsdingen/ensemble)** —
+*"Multi-agent collaboration engine — AI agents that work as one."*
+
+This is a fork. What it adds, what has been sent back upstream, and how to check that
+upstream hasn't already solved something before working on it: see [FORK.md](FORK.md).
 
 ## License
 

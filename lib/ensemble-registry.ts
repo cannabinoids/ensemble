@@ -1,10 +1,14 @@
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
+import { EventEmitter } from 'events'
 import { v4 as uuidv4 } from 'uuid'
 import type { EnsembleTeam, EnsembleMessage, CreateTeamRequest } from '../types/ensemble'
 import { getEnsembleRegistryDir } from './ensemble-paths'
 import { collabMessagesFile } from './collab-paths'
+
+export const messageEvents = new EventEmitter()
+messageEvents.setMaxListeners(100)
 
 const ENSEMBLE_DIR = getEnsembleRegistryDir()
 const TEAMS_FILE = path.join(ENSEMBLE_DIR, 'teams.json')
@@ -137,6 +141,7 @@ export function appendMessage(teamId: string, message: EnsembleMessage): void {
   ensureDir(dir)
   const file = path.join(dir, 'feed.jsonl')
   fs.appendFileSync(file, JSON.stringify(message) + '\n')
+  messageEvents.emit(`message:${teamId}`, message)
 }
 
 export function getMessages(teamId: string, since?: string): EnsembleMessage[] {

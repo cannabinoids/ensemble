@@ -351,6 +351,7 @@ class Monitor {
         this.render()
         break
       case '1': case '2': case '3': case '4':
+      case '5': case '6': case '7': case '8': case '9':
         // Send to specific agent
         if (this.team?.agents) {
           const idx = parseInt(key) - 1
@@ -374,6 +375,10 @@ class Monitor {
         this.cleanup()
         process.exit(0)
         break // eslint: no-fallthrough (process.exit above, but lint can't detect)
+      case 'p': case 'P':
+        // Pause / resume — agents stand down after the step they are on
+        this.togglePause()
+        break
       case 'd': case 'D':
         // Disband team
         this.disbandTeam()
@@ -394,6 +399,17 @@ class Monitor {
     } catch (err) {
       // Will show in next render
     }
+  }
+
+  private async togglePause() {
+    if (!this.team) return
+    const pausing = this.team.status === 'active'
+    if (!pausing && this.team.status !== 'paused') return
+    try {
+      await apiPost(`/api/ensemble/teams/${this.teamId}/${pausing ? 'pause' : 'resume'}`, {})
+      await this.fetchMessages()
+      this.render()
+    } catch { /* status refreshes on the next poll */ }
   }
 
   private async disbandTeam() {
@@ -703,7 +719,8 @@ end tell`
 
       lines.push(
         `${color.gray} [s]${color.reset} steer team  ` +
-        `${color.gray}[1-${this.team?.agents.length || 2}]${color.reset} steer agent  ` +
+        `${color.gray}[1-${Math.min(this.team?.agents.length || 2, 9)}]${color.reset} steer agent  ` +
+        `${color.gray}[p]${color.reset} ${this.team?.status === 'paused' ? 'resume' : 'pause'}  ` +
         `${color.gray}[j/k]${color.reset} scroll  ` +
         `${scrollInfo}` +
         `${color.gray}[d]${color.reset} disband  ` +

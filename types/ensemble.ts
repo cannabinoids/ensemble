@@ -9,6 +9,12 @@ export interface EnsembleTeam {
   completedAt?: string
   feedMode: 'silent' | 'summary' | 'live'
   result?: EnsembleTeamResult
+  /**
+   * When the team was last released from a pause. Completion signals older than
+   * this are ignored: resuming means the user wants more work, so anything the
+   * agents said before the hold must not immediately disband them.
+   */
+  lastResumedAt?: string
 }
 
 export interface EnsembleTeamAgent {
@@ -20,6 +26,12 @@ export interface EnsembleTeamAgent {
   status: 'spawning' | 'active' | 'idle' | 'done' | 'failed'
   worktreePath?: string
   worktreeBranch?: string
+  /** UUID pinned via the program's sessionIdFlag, when supported */
+  sessionUuid?: string
+  /** Resolved transcript file for this agent, when the program exposes one */
+  transcriptPath?: string
+  /** Set once the task prompt was actually delivered — gates watchdog nudges */
+  promptInjectedAt?: string
 }
 
 export interface EnsembleTeamResult {

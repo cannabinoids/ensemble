@@ -139,6 +139,24 @@ global file that a concurrent collab overwrites.
 - `ITERM_NATIVE`: "Team is live in the new iTerm pane on the right."
 - `TMUX_NO`: "`tmux attach -t ensemble-$TEAM_ID` — live TUI monitor (steer, disband, scroll)"
 
+### Step 2b: Interjection — the user can redirect the team mid-run
+
+**Not optional.** While a team is live, anything the user says about the work is a
+steering instruction, not a side comment. The moment they say "actually focus on X" or
+"stop doing Y", relay it immediately:
+
+```bash
+npx ensemble steer "$TEAM_ID" "<what the user just said>"
+npx ensemble steer "$TEAM_ID" --to claude-2 "<for one agent>"
+npx ensemble pause "$TEAM_ID"    # agents finish the step in flight, then wait
+npx ensemble resume "$TEAM_ID"
+```
+
+- Relay first, discuss second — the agents are working while you type.
+- Confirm delivery in one line, then keep polling.
+- Agents answer with `ack: <what changed>`. Surface that ack.
+- Never paste into agent panes yourself; `steer` also writes the durable inbox copy.
+
 ### Step 3: Monitoring — the user MUST see the conversation
 
 **CRITICAL RULE**: The user wants to SEE the team's conversation as it happens. Every poll result must be presented clearly and formatted as a readable conversation. Do NOT just dump raw output — format it as a proper dialogue.

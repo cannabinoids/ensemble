@@ -38,6 +38,7 @@ Any CLI-based coding agent can be a team member. These ship in `agents.json`:
 | **Codex** | Fully tested, default lead | OpenAI Codex CLI |
 | **Claude Code** | Fully tested, default worker | Anthropic Claude Code |
 | **Grok** | Tested in three-agent teams | Needs the project-picker hint, see [Configuration](configuration#supported-agents) |
+| **ollama** (`ollama-claude`, `ollama-codex`) | Experimental | An Ollama model driving a real agent harness via `ollama launch`, see [Configuration](configuration#supported-agents) |
 | **GLM** | Tested in four-agent teams | Claude Code pointed at the Z.ai endpoint, so a GLM model joins as a regular agent |
 | **Gemini CLI** | Experimental | May stall on free-tier rate limits |
 | **Aider** | Untested | Config included, not battle-tested |

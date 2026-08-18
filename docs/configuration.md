@@ -126,6 +126,7 @@ The default team is **Codex (lead) + Claude Code (worker)**. This is the fully t
 | **Gemini CLI** | Experimental | No | Uses `pasteFromFile`, `--yolo` flag. May stop responding due to free-tier rate limits or internal TUI issues. Use a paid API key (`gemini /auth`) for best results. |
 | **GLM** | Tested in four-agent teams | No | Runs Claude Code against the Z.ai endpoint, so it behaves like `claude` (`sendKeys`, `--permission-mode auto`) with a GLM model underneath. Needs a `glm` command on PATH that sets `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`. |
 | **opencode** | Untested | No | Basic config included in `agents.json`, `sendKeys` input |
+| **ollama**, **ollama-claude**, **ollama-codex** | Experimental | No | An Ollama *model* driving a real agent harness via `ollama launch <integration>`, so the agent can shell out to `team-say`. Plain `ollama run <model>` is a chat REPL with no tool calling and cannot join a team. `--model` is required: without it the launcher opens an interactive picker and startup hangs. |
 | **Any CLI tool** | Custom | No | See [Adding a custom agent](#adding-a-custom-agent) |
 
 #### How to use a non-default agent

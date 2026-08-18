@@ -14,7 +14,7 @@ import {
   spawnLocalAgent, killLocalAgent,
   spawnRemoteAgent as spawnRemote, killRemoteAgent,
   postRemoteSessionCommand, isRemoteSessionReady,
-  getAgentTokenUsage,
+  getAgentTokenUsage, archiveAgentTranscript,
 } from '../lib/agent-spawner'
 import { isSelf, getHostById, getSelfHostId } from '../lib/hosts-config'
 import { getRuntime } from '../lib/agent-runtime'
@@ -24,7 +24,8 @@ import { AgentWatchdog } from '../lib/agent-watchdog'
 import {
   collabPromptFile, collabDeliveryFile, collabSummaryFile, collabMessagesFile,
   collabRuntimeDir, collabFinishedMarker, collabBridgePosted,
-  collabBridgeResult, ensureCollabDirs,
+  collabBridgeResult, ensureCollabDirs, collabSystemPromptFile,
+  collabInboxFile, collabTranscriptArchiveDir,
 } from '../lib/collab-paths'
 import fs from 'fs'
 import path from 'path'
@@ -34,6 +35,54 @@ import { createWorktree, mergeWorktree, destroyWorktree, type WorktreeInfo } fro
 import { runStagedWorkflow } from '../lib/staged-workflow'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+function gatherProjectContext(cwd: string): string {
+  const parts: string[] = []
+
+  // Walk up to find git root
+  let dir = cwd
+  let repoRoot: string | null = null
+  for (let i = 0; i < 8; i++) {
+    if (fs.existsSync(path.join(dir, '.git'))) { repoRoot = dir; break }
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+
+  parts.push(`Working directory: ${cwd}`)
+  if (repoRoot && repoRoot !== cwd) parts.push(`Repository root: ${repoRoot}`)
+
+  // CLAUDE.md — cwd first, then repo root
+  for (const claudeDir of [cwd, repoRoot].filter(Boolean) as string[]) {
+    const claudePath = path.join(claudeDir, 'CLAUDE.md')
+    if (fs.existsSync(claudePath)) {
+      try {
+        const raw = fs.readFileSync(claudePath, 'utf-8').trim()
+        if (raw) {
+          const content = raw.length > 2500 ? raw.slice(0, 2500) + '\n...(truncated)' : raw
+          parts.push(`\nProject instructions (CLAUDE.md):\n${content}`)
+          break
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
+  // package.json name + description
+  const pkgPath = path.join(cwd, 'package.json')
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { name?: string; description?: string }
+      if (pkg.name) parts.push(`\nProject: ${pkg.name}${pkg.description ? ` — ${pkg.description}` : ''}`)
+    } catch { /* ignore */ }
+  }
+
+  // Key file indicators
+  const indicators = ['pyproject.toml', 'Cargo.toml', 'go.mod', 'pom.xml', 'Makefile']
+    .filter(f => fs.existsSync(path.join(cwd, f)))
+  if (indicators.length > 0) parts.push(`Key files: ${indicators.join(', ')}`)
+
+  return parts.length > 1 ? `PROJECT CONTEXT:\n${parts.join('\n')}` : ''
+}
 
 interface ServiceResult<T> {
   data?: T
@@ -55,6 +104,24 @@ const COMPLETION_SIGNAL_WINDOW_MS = 180_000
 // unaffected: a team that is really done still ends within seconds.
 const SINGLE_SIGNAL_IDLE_THRESHOLD_MS = 480_000
 const TWO_SIGNAL_IDLE_THRESHOLD_MS = 300_000
+/** A sign-off is short; long analysis prose that mentions "done" is not one. */
+const MAX_COMPLETION_SIGNAL_LENGTH = 400
+/** Machinery an agent can discuss without meaning "I am finished". */
+const ORCHESTRATION_VOCABULARY = /---STATUS|COLLAB_DONE|team-say|team-read|DONE protocol|\bsentinel\b/i
+/** How long to wait for an agent's pane to go idle before pasting an interjection. */
+const PANE_IDLE_WAIT_MS = 20_000
+const NAMED_ROLE_FOCUS: Record<string, string[]> = {
+  critic: [
+    'Your role is to challenge, probe, and find flaws in your teammates\' work.',
+    'Push back on assumptions, identify edge cases, spot security or performance issues, and suggest concrete improvements.',
+    'Do not simply agree — your value is in the quality and specificity of your disagreement.',
+  ],
+  researcher: [
+    'Independently research your assigned angle of the topic.',
+    'Focus on depth over breadth. Surface surprising findings and flag anything that contradicts conventional wisdom.',
+    'Share findings with your teammates for comparison and synthesis.',
+  ],
+}
 const MIN_MESSAGES_BEFORE_AUTO_DISBAND = 10
 // Explicit sentinel: when every active agent sends this exact marker as a full
 // message, the team auto-disbands immediately — no idle wait, no minimum
@@ -127,6 +194,14 @@ interface CompletionSignal {
  */
 function isCompletionStatement(content: string): boolean {
   if (CLOSING_PATTERNS.some(pattern => pattern.test(content))) return true
+  // Below this line only the heuristic path remains, so the shape of the message
+  // matters. A sign-off is short: a long analysis that happens to contain "done"
+  // is an agent working, not an agent finishing.
+  if (content.length > MAX_COMPLETION_SIGNAL_LENGTH) return false
+  // And an agent describing the orchestration is not reporting on itself. Seen on
+  // a review task pointed at collab-poll.sh: both agents quoted the script's own
+  // ---STATUS:{ACTIVE,QUIET,DONE,WAITING} sentinel, which ended the run.
+  if (ORCHESTRATION_VOCABULARY.test(content)) return false
   if (!COMPLETION_PATTERNS.some(pattern => pattern.test(content))) return false
   return !CONTINUATION_PATTERNS.some(pattern => pattern.test(content))
 }
@@ -270,7 +345,23 @@ class EnsembleService {
   }
 
   private shouldAutoDisband(team: EnsembleTeam): boolean {
-    const messages = getMessages(team.id)
+    const allMessages = getMessages(team.id)
+    // Completion counts only from the last message the user sent. `ensemble steer`
+    // exists so a user can redirect a running team, so a sentinel or sign-off from
+    // before that redirect no longer describes the work: an agent that had already
+    // finished is not finished with the new instruction. Without this the team can
+    // disband while an agent is mid-answer to the user.
+    const resumedAtMs = team.lastResumedAt ? new Date(team.lastResumedAt).getTime() : 0
+    const lastUserMessageMs = allMessages
+      .filter(message => message.from === 'user' && message.timestamp)
+      .reduce((latest, message) => Math.max(latest, new Date(message.timestamp).getTime() || 0), 0)
+    const cutoffMs = Math.max(resumedAtMs, lastUserMessageMs)
+    const messages = cutoffMs
+      ? allMessages.filter(message => {
+        const ts = message.timestamp ? new Date(message.timestamp).getTime() : NaN
+        return Number.isNaN(ts) || ts >= cutoffMs
+      })
+      : allMessages
     const nonEnsembleMessages = messages.filter(message => message.from !== 'ensemble')
     const lastMessage = nonEnsembleMessages[nonEnsembleMessages.length - 1]
     if (!lastMessage) return false
@@ -317,7 +408,7 @@ class EnsembleService {
     // third agent mid-task. The exact sentinel above is the fast path; these
     // patterns are only a safety net for teams that go quiet without sending it.
     if (idleForMs <= TWO_SIGNAL_IDLE_THRESHOLD_MS) return false
-    if (this.hasTwoRecentCompletionSignals(completionSignals)) return true
+    if (this.hasRecentCompletionSignalsFromAll(completionSignals, activeAgentNames.size)) return true
     if (idleForMs <= SINGLE_SIGNAL_IDLE_THRESHOLD_MS) return false
     return completionSignals.length >= 1
   }
@@ -326,11 +417,22 @@ class EnsembleService {
     return isCompletionStatement(content)
   }
 
-  private hasTwoRecentCompletionSignals(signals: CompletionSignal[]): boolean {
-    for (let i = 0; i < signals.length; i++) {
-      for (let j = i + 1; j < signals.length; j++) {
-        if (signals[j].timestamp - signals[i].timestamp > COMPLETION_SIGNAL_WINDOW_MS) break
-        if (signals[i].agentName !== signals[j].agentName) return true
+  /**
+   * True when EVERY active agent produced a completion signal inside one
+   * COMPLETION_SIGNAL_WINDOW_MS window — the same bar the sentinel path uses.
+   * Two agents agreeing is not the team agreeing: in a trio that ends the run
+   * for the third, which is what the comment above this call warns about.
+   */
+  private hasRecentCompletionSignalsFromAll(
+    signals: CompletionSignal[], activeAgentCount: number,
+  ): boolean {
+    if (activeAgentCount < 2) return false
+    for (let start = 0; start < signals.length; start++) {
+      const seen = new Set<string>([signals[start].agentName])
+      for (let end = start + 1; end < signals.length; end++) {
+        if (signals[end].timestamp - signals[start].timestamp > COMPLETION_SIGNAL_WINDOW_MS) break
+        seen.add(signals[end].agentName)
+        if (seen.size >= activeAgentCount) return true
       }
     }
     return false
@@ -468,7 +570,7 @@ export function loadCollabTemplate(templateName?: string): CollabTemplatesFile['
   }
 }
 
-export function buildPromptPreview(params: {
+export interface CollabPromptParams {
   teamId: string
   teamName: string
   description: string
@@ -476,14 +578,29 @@ export function buildPromptPreview(params: {
   teammateNames: string[]
   agentIndex: number
   templateName?: string
-}): string {
+  agentRole?: string
+  contextSnippet?: string
+}
+
+/**
+ * Build an agent's collab prompt in two parts:
+ *
+ * - `system` — identity, role, and the orchestration protocol. Delivered via the
+ *   program's system-prompt flag when it declares one, so this scaffolding never
+ *   appears as a user turn in the agent's own chat history.
+ * - `task` — the actual work, typed in as the opening message.
+ *
+ * Programs without a system-prompt flag receive `system + task` inline.
+ */
+export function buildCollabPrompt(params: CollabPromptParams): { system: string; task: string } {
   const template = loadCollabTemplate(params.templateName)
   const scriptsDir = path.join(__dirname, '..', 'scripts')
   // Everyone reads the same feed regardless of the `to` field, so with more than
   // one teammate address the team — naming a single one reads as a private aside.
   const sayTarget = params.teammateNames.length === 1 ? params.teammateNames[0] : 'team'
   const teamSayCmd = `${scriptsDir}/team-say.sh ${params.teamId} ${params.agentName} ${sayTarget || 'team'}`
-  const teamReadCmd = `${scriptsDir}/team-read.sh ${params.teamId}`
+  // Passing the agent name surfaces that agent's priority inbox alongside the feed.
+  const teamReadCmd = `${scriptsDir}/team-read.sh ${params.teamId} ${params.agentName}`
 
   // Wording has to scale past a pair: a trio told "both teammates" will close
   // the team as soon as one other agent agrees.
@@ -503,6 +620,9 @@ export function buildPromptPreview(params: {
       `ROLE: ${templateRole.role}.`,
       templateRole.focus,
     ]
+  } else if (params.agentRole && !['lead', 'worker'].includes(params.agentRole.toLowerCase())) {
+    const extra = NAMED_ROLE_FOCUS[params.agentRole.toLowerCase()] ?? []
+    roleInstructions = [`ROLE: ${params.agentRole.toUpperCase()}.`, ...extra]
   } else {
     const isLead = params.agentIndex === 0
     const roleName = isLead ? 'LEAD' : 'WORKER'
@@ -524,9 +644,9 @@ export function buildPromptPreview(params: {
         ]
   }
 
-  return [
+  const systemLines = [
+    params.contextSnippet ? `${params.contextSnippet}\n` : '',
     `You are ${params.agentName} in team "${params.teamName}" with ${mateWord} ${mateList}.`,
-    `Task: ${params.description}`,
     ...roleInstructions,
     `COMMUNICATION RULES:`,
     `1. Send findings: ${teamSayCmd} "your message"`,
@@ -535,12 +655,29 @@ export function buildPromptPreview(params: {
     `4. After EVERY team-say, run team-read to check for responses`,
     `5. If teammate shared findings, RESPOND to them`,
     `6. Keep alternating: analyze, share, read, respond, analyze`,
+    `QUOTING: your message is an argument to a shell command, so your own shell expands it before ensemble sees it. Wrap it in single quotes and never put backticks or $ inside it — write code references as plain words (STATUS:DONE, not the backticked form).`,
+    `USER INTERJECTIONS (highest priority):`,
+    `Messages whose sender is "user" come from the human supervising this run. They outrank your ${mateWord} and your current plan.`,
+    `On a user message, stop, reply with team-say starting with "ack:" stating in one line what you are changing, then follow the new direction. If it contradicts the plan, the user wins.`,
+    `If the user sends HOLD, finish only the step in flight, post a short status via team-say, and do no further work until a RESUME message arrives.`,
     `DONE PROTOCOL (important):`,
     `7. When you believe the task is fully converged and there is nothing substantive left to say, explicitly propose closure to your ${mateWord} in a normal team-say message ("I think we're done because X — agree?").`,
     `8. Only once ${solo ? 'your teammate has' : `ALL ${mateCount} of your teammates have`} confirmed agreement, send a FINAL team-say whose message is EXACTLY the sentinel <<COLLAB_DONE>> (nothing else, no quotes, no prose). The team auto-disbands only after all ${agentTotal} agents have sent <<COLLAB_DONE>>, so do not send it prematurely${solo ? '' : ', and do not treat one teammate agreeing as the whole team agreeing'}.`,
     `9. Before sending <<COLLAB_DONE>>, make sure the important conclusions (recommendation, rationale, build list, layout, decisions) are actually present as long team-say messages in the transcript — that is what the summary will preserve. Do not keep insights only in your head.`,
-    `Start NOW: greet your teammate with team-say, then begin.`,
-  ].join(' ')
+  ].filter(Boolean)
+
+  const taskLines = [
+    `Task: ${params.description}`,
+    `Start NOW: greet your ${mateWord} with team-say, then begin.`,
+  ]
+
+  return { system: systemLines.join(' '), task: taskLines.join(' ') }
+}
+
+/** Full prompt as one string — for agents without a system-prompt flag. */
+export function buildPromptPreview(params: CollabPromptParams): string {
+  const { system, task } = buildCollabPrompt(params)
+  return `${system} ${task}`
 }
 
 export async function createEnsembleTeam(
@@ -598,6 +735,24 @@ export async function createEnsembleTeam(
     }
   }
 
+  const projectContext = gatherProjectContext(cwd)
+
+  const buildPromptParts = (
+    agentName: string, otherNames: string[], agentIndex: number, agentRole?: string,
+  ) => {
+    return buildCollabPrompt({
+      teamId: team.id,
+      teamName: team.name,
+      description: team.description,
+      agentName,
+      teammateNames: otherNames,
+      agentIndex,
+      agentRole,
+      templateName: request.templateName,
+      contextSnippet: projectContext || undefined,
+    })
+  }
+
   const buildPrompt = (agentName: string, otherNames: string[], agentIndex: number) => {
     return buildPromptPreview({
       teamId: team.id,
@@ -615,11 +770,18 @@ export async function createEnsembleTeam(
     const agentSpec = team.agents[i]
     const hostId = await routeToHost(agentSpec.program, request.agents[i].hostId)
     const agentName = `${team.name}-${agentSpec.name}`
-    const prompt = buildPrompt(agentSpec.name, team.agents.filter((_, j) => j !== i).map(a => a.name), i)
+    const teammates = team.agents.filter((_, j) => j !== i).map(a => a.name)
+    const { system, task } = buildPromptParts(agentSpec.name, teammates, i, agentSpec.role)
+    const prompt = `${system} ${task}`
 
     ensureCollabDirs(team.id)
+    // Programs with a system-prompt flag get the protocol out-of-band and only the
+    // task typed in; the rest get everything inline, as before.
+    const supportsSystemPrompt = Boolean(resolveAgentProgram(agentSpec.program).systemPromptFileFlag)
+    const systemPromptFile = collabSystemPromptFile(team.id, agentSpec.name)
     const promptFile = collabPromptFile(team.id, agentSpec.name)
-    fs.writeFileSync(promptFile, prompt)
+    fs.writeFileSync(systemPromptFile, system)
+    fs.writeFileSync(promptFile, supportsSystemPrompt ? task : prompt)
     console.log(`[Ensemble] Prompt for ${agentSpec.name}: ${prompt}`)
 
     try {
@@ -633,8 +795,11 @@ export async function createEnsembleTeam(
           program: agentSpec.program,
           workingDirectory: agentCwd,
           hostId,
+          systemPromptFile: supportsSystemPrompt ? systemPromptFile : undefined,
         })
         agentId = spawned.id
+        team.agents[i].sessionUuid = spawned.sessionUuid
+        team.agents[i].transcriptPath = spawned.transcriptPath
       } else {
         const host = getHostById(hostId)
         if (!host) throw new Error(`Unknown host: ${hostId}`)
@@ -671,7 +836,11 @@ export async function createEnsembleTeam(
     }
   }
 
-  updateTeam(team.id, { ...team, status: 'active' })
+  // Mutate the local team too: later writes persist this same object and would
+  // otherwise revert the status to "forming", which keeps the idle checker and
+  // auto-disband from ever seeing the team.
+  team.status = 'active'
+  updateTeam(team.id, { ...team })
 
   // Phase 2: Wait for ALL agents to be ready, then inject prompts
   const activeAgents = team.agents.filter(a => a.status === 'active')
@@ -842,6 +1011,10 @@ export async function createEnsembleTeam(
                 }
               }
             }
+            const injectedAt = new Date().toISOString()
+            const tracked = team.agents.find(a => a.name === agent.name)
+            if (tracked) tracked.promptInjectedAt = injectedAt
+            updateTeam(team.id, { ...team })
             console.log(`[Ensemble] ✓ Prompt injected into ${sessionName}`)
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err)
@@ -886,6 +1059,40 @@ export function getTeamFeed(teamId: string, since?: string): ServiceResult<{ mes
   return { data: { messages: getMessages(teamId, since) }, status: 200 }
 }
 
+/**
+ * Wait for an agent's pane to look idle before pasting into it. A paste landing
+ * mid-generation can be swallowed or mangled by the CLI's composer, which is how
+ * interjections used to go missing. Returns false on timeout — the caller pastes
+ * anyway, because the inbox file is the durable backstop.
+ */
+async function waitForPaneIdle(
+  sessionName: string, program: string, maxWaitMs = PANE_IDLE_WAIT_MS,
+): Promise<boolean> {
+  const runtime = getRuntime()
+  const readyMarker = resolveAgentProgram(program).readyMarker
+  if (!readyMarker) return true
+  const start = Date.now()
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const pane = await runtime.capturePane(sessionName, 30)
+      if (pane.includes(readyMarker)) return true
+    } catch { /* pane not readable — fall through to timeout */ }
+    await new Promise(r => setTimeout(r, 1000))
+  }
+  return false
+}
+
+/** Append an interjection to the agent's inbox so it survives a lost paste. */
+function appendToInbox(teamId: string, agentName: string, sender: string, content: string): void {
+  try {
+    const inboxFile = collabInboxFile(teamId, agentName)
+    fs.mkdirSync(path.dirname(inboxFile), { recursive: true })
+    fs.appendFileSync(inboxFile, `\n## ${new Date().toISOString()} — from ${sender}\n${content}\n`)
+  } catch (err) {
+    console.warn(`[Ensemble] Could not write inbox for ${agentName}:`, err)
+  }
+}
+
 export async function sendTeamMessage(
   teamId: string, to: string, content: string, from?: string,
   existingId?: string, existingTimestamp?: string,
@@ -901,6 +1108,7 @@ export async function sendTeamMessage(
 
   // Determine which agents should receive this message in their tmux pane
   const sender = from || 'user'
+  const isInterjection = sender === 'user'
   const recipients = to === 'team'
     ? team.agents.filter(a => a.status === 'active' && a.name !== sender)
     : team.agents.filter(a => a.status === 'active' && a.name === to)
@@ -911,15 +1119,28 @@ export async function sendTeamMessage(
     try {
       const sessionName = `${team.name}-${targetAgent.name}`
 
+      // A user interjection goes to the inbox first, so it survives a pane that is
+      // gone or a paste swallowed mid-tool-call.
+      if (isInterjection) appendToInbox(teamId, targetAgent.name, sender, content)
+
       // Skip delivery if the agent's tmux pane no longer exists (agent finished and exited)
       const paneAlive = await runtime.sessionExists(sessionName)
       if (!paneAlive) continue
 
       // Wrap message with sender context + response nudge
-      const deliveryText = [
-        `[Team message from ${sender}]: ${content}`,
-        `→ Respond with team-say. Then run team-read to check for more messages.`,
-      ].join('\n')
+      const deliveryText = isInterjection
+        ? [
+          `⚡ USER INTERJECTION — highest priority, overrides your current plan.`,
+          `[from ${sender}]: ${content}`,
+          `→ Reply with team-say starting with "ack:" stating what you are changing, then follow this direction.`,
+        ].join('\n')
+        : [
+          `[Team message from ${sender}]: ${content}`,
+          `→ Respond with team-say. Then run team-read to check for more messages.`,
+        ].join('\n')
+
+      // Land interjections between turns rather than mid-generation.
+      if (isInterjection) await waitForPaneIdle(sessionName, targetAgent.program)
 
       if (targetAgent.hostId && !isSelf(targetAgent.hostId)) {
         const host = getHostById(targetAgent.hostId)
@@ -943,6 +1164,77 @@ export async function sendTeamMessage(
   }
 
   return { data: { message }, status: 200 }
+}
+
+const HOLD_MESSAGE = 'HOLD: finish only the step you are on, post a short status via team-say, then stop and wait. Do not start new work until you receive RESUME.'
+const RESUME_MESSAGE = 'RESUME: you may continue. Re-read the latest messages with team-read first, then carry on from where you stopped.'
+
+/**
+ * Pause or resume a team. A paused team keeps its sessions alive but is skipped by
+ * the idle checker and the watchdog, so nothing nudges or disbands it while the
+ * user decides what to do next.
+ */
+export async function setTeamPaused(
+  teamId: string, paused: boolean,
+): Promise<ServiceResult<{ team: EnsembleTeam }>> {
+  const team = getTeam(teamId)
+  if (!team) return { error: 'Team not found', status: 404 }
+
+  if (paused && team.status !== 'active') {
+    return { error: `Cannot pause a team with status "${team.status}"`, status: 409 }
+  }
+  if (!paused && team.status !== 'paused') {
+    return { error: `Cannot resume a team with status "${team.status}"`, status: 409 }
+  }
+
+  // Flip status first: pausing stops the watchdog from nudging an agent that was
+  // just told to stand down. On resume, stamp the time so stale completion
+  // signals from before the hold cannot disband the team the moment it restarts.
+  updateTeam(teamId, {
+    ...team,
+    status: paused ? 'paused' : 'active',
+    ...(paused ? {} : { lastResumedAt: new Date().toISOString() }),
+  })
+  await sendTeamMessage(teamId, 'team', paused ? HOLD_MESSAGE : RESUME_MESSAGE, 'user')
+
+  const updated = getTeam(teamId) || team
+  return { data: { team: updated }, status: 200 }
+}
+
+/**
+ * Move agent transcripts into the ensemble archive so a collab run stops showing up
+ * in the user's own session history. Only touches transcripts ensemble itself
+ * pinned via sessionIdFlag, so it can never move a conversation the user started.
+ */
+export function archiveTeamTranscripts(teamId: string): { archived: number; failed: number } {
+  const team = getTeam(teamId)
+  if (!team) return { archived: 0, failed: 0 }
+  if (process.env.ENSEMBLE_ARCHIVE_TRANSCRIPTS === '0') return { archived: 0, failed: 0 }
+
+  const archiveDir = collabTranscriptArchiveDir(teamId)
+  let archived = 0
+  let failed = 0
+
+  for (const agent of team.agents) {
+    if (!agent.transcriptPath || !agent.sessionUuid) continue
+    const result = archiveAgentTranscript(agent.transcriptPath, archiveDir)
+    if (result.archived) {
+      archived++
+      console.log(`[Ensemble] Archived ${agent.name} transcript → ${result.to}`)
+    } else if (result.reason && result.reason !== 'no transcript found') {
+      failed++
+      console.warn(`[Ensemble] Could not archive ${agent.name} transcript: ${result.reason}`)
+    }
+  }
+
+  if (archived > 0) {
+    appendMessage(teamId, {
+      id: uuidv4(), teamId, from: 'ensemble', to: 'team',
+      content: `🗄 Archived ${archived} agent transcript(s) to ${archiveDir}`,
+      type: 'chat', timestamp: new Date().toISOString(),
+    })
+  }
+  return { archived, failed }
 }
 
 /**
@@ -1097,6 +1389,10 @@ export async function disbandTeam(teamId: string): Promise<ServiceResult<{ team:
     }
   }
 
+  // After the CLIs have exited (and flushed their transcripts), move them out of the
+  // user's session history. Disable with ENSEMBLE_ARCHIVE_TRANSCRIPTS=0.
+  archiveTeamTranscripts(teamId)
+
   const agentsWithWorktrees = team.agents.filter(
     a => a.worktreePath && a.worktreeBranch && (!a.hostId || isSelf(a.hostId))
   )
@@ -1225,4 +1521,6 @@ export const __testing = {
   SINGLE_SIGNAL_IDLE_THRESHOLD_MS,
   COMPLETION_PATTERNS,
   CONTINUATION_PATTERNS,
+  MAX_COMPLETION_SIGNAL_LENGTH,
+  ORCHESTRATION_VOCABULARY,
 }
