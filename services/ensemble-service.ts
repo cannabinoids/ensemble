@@ -33,6 +33,7 @@ import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
 import { createWorktree, mergeWorktree, destroyWorktree, type WorktreeInfo } from '../lib/worktree-manager'
 import { runStagedWorkflow } from '../lib/staged-workflow'
+import { loadSessionBrief, formatBriefBlock } from '../lib/session-brief'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -737,6 +738,34 @@ export async function createEnsembleTeam(
 
   const projectContext = gatherProjectContext(cwd)
 
+  // Session brief: what the human already knows, handed over on the way in. A brief
+  // that cannot be used is reported in the feed rather than dropped — launching
+  // without the context you asked for should never be silent.
+  let briefBlock = ''
+  if (request.briefFile) {
+    const { brief, problem } = loadSessionBrief(request.briefFile)
+    if (brief) {
+      briefBlock = formatBriefBlock(brief)
+      if (brief.truncated) {
+        appendMessage(team.id, {
+          id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
+          content: `⚠ Session brief truncated to ${briefBlock.length} chars (was ${brief.originalLength}) — raise ENSEMBLE_BRIEF_MAX_CHARS to send more`,
+          type: 'chat', timestamp: new Date().toISOString(),
+        })
+      }
+    } else if (problem) {
+      const detail = problem.kind === 'secret'
+        ? `${problem.detail} — refusing to send it to the agents`
+        : problem.detail
+      console.warn(`[Ensemble] Session brief not used: ${detail}`)
+      appendMessage(team.id, {
+        id: uuidv4(), teamId: team.id, from: 'ensemble', to: 'team',
+        content: `⚠ Session brief not used: ${detail}`,
+        type: 'chat', timestamp: new Date().toISOString(),
+      })
+    }
+  }
+
   const buildPromptParts = (
     agentName: string, otherNames: string[], agentIndex: number, agentRole?: string,
   ) => {
@@ -749,7 +778,7 @@ export async function createEnsembleTeam(
       agentIndex,
       agentRole,
       templateName: request.templateName,
-      contextSnippet: projectContext || undefined,
+      contextSnippet: [projectContext, briefBlock].filter(Boolean).join('\n\n') || undefined,
     })
   }
 

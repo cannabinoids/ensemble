@@ -174,6 +174,7 @@ async function cmdRun(
   timeoutSec: number,
   templateName?: string,
   roleFlags?: string,
+  briefFile?: string,
 ) {
   const cwd = process.cwd()
 
@@ -219,6 +220,7 @@ async function cmdRun(
     feedMode: 'live',
     workingDirectory: cwd,
     ...(templateName ? { templateName } : {}),
+    ...(briefFile ? { briefFile: path.resolve(briefFile) } : {}),
   }) as { team: { id: string } }
 
   const teamId = result.team.id
@@ -302,6 +304,7 @@ switch (cmd) {
     let agentList: string | undefined
     let templateName: string | undefined
     let roleList: string | undefined
+    let briefPath: string | undefined
     let timeout = 600
     // Parse --agents, --template, --roles and --timeout flags
     for (let i = 0; i < runArgs.length; i++) {
@@ -311,16 +314,18 @@ switch (cmd) {
         templateName = runArgs.splice(i, 2)[1]; i--
       } else if (runArgs[i] === '--roles' && runArgs[i + 1]) {
         roleList = runArgs.splice(i, 2)[1]; i--
+      } else if (runArgs[i] === '--brief' && runArgs[i + 1]) {
+        briefPath = runArgs.splice(i, 2)[1]; i--
       } else if (runArgs[i] === '--timeout' && runArgs[i + 1]) {
         timeout = parseInt(runArgs.splice(i, 2)[1], 10); i--
       }
     }
     const taskDesc = runArgs.join(' ')
     if (!taskDesc) {
-      console.log(`Usage: ensemble run "task description" [--agents codex,claude] [--template trinity] [--roles lead,critic] [--timeout 600]`)
+      console.log(`Usage: ensemble run "task description" [--agents codex,claude] [--template trinity] [--roles lead,critic] [--brief FILE] [--timeout 600]`)
       process.exit(1)
     }
-    await cmdRun(taskDesc, agentList, timeout, templateName, roleList)
+    await cmdRun(taskDesc, agentList, timeout, templateName, roleList, briefPath)
     break
   }
   case 'steer':

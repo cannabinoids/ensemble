@@ -35,6 +35,9 @@ TEMPLATE="${4:-${COLLAB_TEMPLATE:-}}"
 # Roles match the agent list positionally (lead,worker,critic). Also settable via
 # COLLAB_ROLES. Empty = lead for the first agent, worker for the rest.
 ROLES="${5:-${COLLAB_ROLES:-}}"
+# Path to a curated brief describing what the human already worked out before this run.
+# Injected into every agent's system prompt. Also settable via COLLAB_BRIEF.
+BRIEF="${6:-${COLLAB_BRIEF:-}}"
 
 # ─── Auto-fallback to codex-only when claude auth is dead (set by preflight) ───
 # Preflight writes /tmp/collab-agents-override.txt when claude tmux-probe failed.
@@ -86,7 +89,7 @@ fi
 # ─── 2. Create team (use env vars to avoid quoting hell) ───
 TEAM_NAME="collab-$(python3 -c 'import random,time; print(str(time.time_ns()//1000000)+"-"+str(random.randint(1000,9999)))')"
 PAYLOAD_FILE=$(mktemp)
-TNAME="$TEAM_NAME" TDESC="$TASK" TCWD="$CWD" THOST="$HOST_ID" TAGENTS="$AGENTS" TTEMPLATE="$TEMPLATE" TROLES="$ROLES" PFILE="$PAYLOAD_FILE" python3 -c "
+TNAME="$TEAM_NAME" TDESC="$TASK" TCWD="$CWD" THOST="$HOST_ID" TAGENTS="$AGENTS" TTEMPLATE="$TEMPLATE" TROLES="$ROLES" TBRIEF="$BRIEF" PFILE="$PAYLOAD_FILE" python3 -c "
 import json, os
 agents_str = os.environ.get('TAGENTS', '')
 if agents_str:
@@ -114,6 +117,9 @@ payload = {
 template = os.environ.get('TTEMPLATE', '').strip()
 if template:
     payload['templateName'] = template
+brief = os.environ.get('TBRIEF', '').strip()
+if brief:
+    payload['briefFile'] = os.path.abspath(os.path.expanduser(brief))
 json.dump(payload, open(os.environ['PFILE'], 'w'))
 "
 RESULT=$(curl -sf -X POST "$API/api/ensemble/teams" \
@@ -138,6 +144,13 @@ printf '%s\n' "$TEAM_ID" > "$TEAM_ID_FILE"
 # that support parallel collabs should read the TEAM_ID=... line from stdout instead.
 printf '%s\n' "$TEAM_ID" > /tmp/collab-team-id.txt
 echo -e "  ${CHECK} Team created ${D}(${TEAM_NAME})${R}"
+if [ -n "$BRIEF" ]; then
+  if [ -r "$BRIEF" ]; then
+    echo -e "  ${CHECK} Session brief ${D}$(wc -c < "$BRIEF" | tr -d ' ') bytes${R}"
+  else
+    echo -e "  \033[93m!\033[0m Session brief not readable: ${BRIEF}"
+  fi
+fi
 if [ -n "$TEMPLATE" ]; then
   echo -e "  ${CHECK} Template ${D}${TEMPLATE}${R}"
 fi

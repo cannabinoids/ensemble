@@ -139,6 +139,47 @@ global file that a concurrent collab overwrites.
 - `ITERM_NATIVE`: "Team is live in the new iTerm pane on the right."
 - `TMUX_NO`: "`tmux attach -t ensemble-$TEAM_ID` — live TUI monitor (steer, disband, scroll)"
 
+### Step 1b: Write the session brief
+
+The team starts cold. It gets the task string and whatever it can read off disk, but
+nothing of what you and the user already worked out in this conversation — so agents
+re-derive decisions, and sometimes argue their way back to an option the user already
+rejected.
+
+Before launching, write a short brief and pass it with `--brief`:
+
+```bash
+BRIEF=/tmp/collab-brief-$$.md
+cat > "$BRIEF" <<'BRIEF_EOF'
+## What we're doing
+<one or two sentences>
+
+## Already decided
+- <decision and the reason, so it is not re-litigated>
+
+## Out of scope
+- <what the user explicitly does not want touched>
+
+## Open questions
+- <what the team is actually being asked to resolve>
+BRIEF_EOF
+collab-launch "$(pwd)" "$TASK_DESCRIPTION" "" "" "" "$BRIEF"
+```
+
+Rules for the brief:
+
+- **Write it, do not dump the conversation.** Never paste the transcript, and never
+  include anything personal the user said in passing. It goes into every agent's
+  context — including third-party CLIs — and into their archived transcripts.
+- **No credentials, ever.** Ensemble refuses a brief containing key-shaped strings and
+  says so in the feed, but do not rely on that catching everything.
+- **Keep it under ~2000 characters** (`ENSEMBLE_BRIEF_MAX_CHARS`). Past that it is
+  truncated, and the truncation is announced in the team feed.
+- **Decisions and constraints, not narrative.** "We chose X over Y because Z" is worth
+  a line; "then we tried a few things" is not.
+- It is delivered as background, not orders: agents are told the repository wins where
+  the brief disagrees with it.
+
 ### Step 2b: Interjection — the user can redirect the team mid-run
 
 **Not optional.** While a team is live, anything the user says about the work is a

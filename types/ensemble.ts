@@ -64,6 +64,12 @@ export interface CreateTeamRequest {
   feedMode?: 'silent' | 'summary' | 'live'
   workingDirectory?: string
   templateName?: string
+  /**
+   * Path to a curated brief describing what the human already worked out before this
+   * run. Injected into every agent's system prompt. Deliberately a written summary
+   * rather than a session transcript — see lib/session-brief.ts.
+   */
+  briefFile?: string
   useWorktrees?: boolean
   staged?: boolean
   stagedConfig?: StagedWorkflowConfig

@@ -254,6 +254,23 @@ python3 scripts/parse-messages.py <file> [options]
 
 ---
 
+## Session brief
+
+`collab-launch.sh` takes a sixth positional argument (or `COLLAB_BRIEF`): a path to a
+curated brief describing what the human already worked out before the run. It is
+injected into every agent's system prompt, ahead of the task.
+
+```bash
+./scripts/collab-launch.sh "$(pwd)" "Review the retry path" codex,claude "" "" ./brief.md
+```
+
+It is deliberately a written summary rather than a session transcript: the brief
+reaches every agent CLI on the team and their archived transcripts, so it is bounded
+(`ENSEMBLE_BRIEF_MAX_CHARS`, default 2000), refused outright if it contains
+key-shaped strings, and announced in the feed when truncated or unusable.
+
+---
+
 ## collab-archive-transcripts.sh
 
 **Moves ensemble agent transcripts out of the user's Claude Code session history.**

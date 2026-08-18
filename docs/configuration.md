@@ -18,6 +18,7 @@ nav_order: 3
 | `ENSEMBLE_AGENT_FLAGS` | — | Override agent CLI flags |
 | `ENSEMBLE_WATCHDOG_NUDGE_MS` | `90000` | Time (ms) before idle agent nudge |
 | `ENSEMBLE_WATCHDOG_STALL_MS` | `180000` | Time (ms) before stall detection |
+| `ENSEMBLE_BRIEF_MAX_CHARS` | `2000` | Cap on the session brief injected into agent prompts; past it the brief is truncated and the truncation announced in the feed |
 | `ENSEMBLE_TELEGRAM_BOT_TOKEN` | — | Telegram bot token for notifications |
 | `ENSEMBLE_TELEGRAM_CHAT_ID` | — | Telegram chat ID for notifications |
 | `ENSEMBLE_CREATED_BY` | `$USER` | Creator ID for team metadata |

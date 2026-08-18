@@ -22,6 +22,12 @@ from redoing work that has already landed upstream.
   disband instead of accumulating in the user's own session list.
 - **Ollama-backed agents** via `ollama launch <integration>`, with the `--model` flag
   supplied so startup never blocks on the interactive model picker.
+- **Session brief.** `collab-launch --brief <file>` hands the team a curated summary of
+  what the human already worked out, injected into every agent's system prompt. A
+  written brief rather than a session transcript on purpose: it reaches every agent CLI
+  and their archived transcripts, so it is bounded, refused if it carries key-shaped
+  strings, and announced in the feed when truncated. Upstream covers the other
+  direction — `lib/memory-export.ts` sends finished collabs to claude-mem.
 - **Cost model documented and guarded.** Preflight warns when `ANTHROPIC_API_KEY` or
   `OPENAI_API_KEY` is exported, because the spawner forwards those into agent panes
   where a CLI may prefer them over the user's subscription.
