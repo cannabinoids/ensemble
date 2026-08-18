@@ -55,6 +55,10 @@ const COMPLETION_SIGNAL_WINDOW_MS = 180_000
 // unaffected: a team that is really done still ends within seconds.
 const SINGLE_SIGNAL_IDLE_THRESHOLD_MS = 480_000
 const TWO_SIGNAL_IDLE_THRESHOLD_MS = 300_000
+/** A sign-off is short; long analysis prose that mentions "done" is not one. */
+const MAX_COMPLETION_SIGNAL_LENGTH = 400
+/** Machinery an agent can discuss without meaning "I am finished". */
+const ORCHESTRATION_VOCABULARY = /---STATUS|COLLAB_DONE|team-say|team-read|DONE protocol|\bsentinel\b/i
 const MIN_MESSAGES_BEFORE_AUTO_DISBAND = 10
 // Explicit sentinel: when every active agent sends this exact marker as a full
 // message, the team auto-disbands immediately — no idle wait, no minimum
@@ -127,6 +131,14 @@ interface CompletionSignal {
  */
 function isCompletionStatement(content: string): boolean {
   if (CLOSING_PATTERNS.some(pattern => pattern.test(content))) return true
+  // Below this line only the heuristic path remains, so the shape of the message
+  // matters. A sign-off is short: a long analysis that happens to contain "done"
+  // is an agent working, not an agent finishing.
+  if (content.length > MAX_COMPLETION_SIGNAL_LENGTH) return false
+  // And an agent describing the orchestration is not reporting on itself. Seen on
+  // a review task pointed at collab-poll.sh: both agents quoted the script's own
+  // ---STATUS:{ACTIVE,QUIET,DONE,WAITING} sentinel, which ended the run.
+  if (ORCHESTRATION_VOCABULARY.test(content)) return false
   if (!COMPLETION_PATTERNS.some(pattern => pattern.test(content))) return false
   return !CONTINUATION_PATTERNS.some(pattern => pattern.test(content))
 }
@@ -270,7 +282,21 @@ class EnsembleService {
   }
 
   private shouldAutoDisband(team: EnsembleTeam): boolean {
-    const messages = getMessages(team.id)
+    const allMessages = getMessages(team.id)
+    // Completion counts only from the last message the user sent. `ensemble steer`
+    // exists so a user can redirect a running team, so a sentinel or sign-off from
+    // before that redirect no longer describes the work: an agent that had already
+    // finished is not finished with the new instruction. Without this the team can
+    // disband while an agent is mid-answer to the user.
+    const lastUserMessageMs = allMessages
+      .filter(message => message.from === 'user' && message.timestamp)
+      .reduce((latest, message) => Math.max(latest, new Date(message.timestamp).getTime() || 0), 0)
+    const messages = lastUserMessageMs
+      ? allMessages.filter(message => {
+        const ts = message.timestamp ? new Date(message.timestamp).getTime() : NaN
+        return Number.isNaN(ts) || ts >= lastUserMessageMs
+      })
+      : allMessages
     const nonEnsembleMessages = messages.filter(message => message.from !== 'ensemble')
     const lastMessage = nonEnsembleMessages[nonEnsembleMessages.length - 1]
     if (!lastMessage) return false
@@ -317,7 +343,7 @@ class EnsembleService {
     // third agent mid-task. The exact sentinel above is the fast path; these
     // patterns are only a safety net for teams that go quiet without sending it.
     if (idleForMs <= TWO_SIGNAL_IDLE_THRESHOLD_MS) return false
-    if (this.hasTwoRecentCompletionSignals(completionSignals)) return true
+    if (this.hasRecentCompletionSignalsFromAll(completionSignals, activeAgentNames.size)) return true
     if (idleForMs <= SINGLE_SIGNAL_IDLE_THRESHOLD_MS) return false
     return completionSignals.length >= 1
   }
@@ -326,11 +352,22 @@ class EnsembleService {
     return isCompletionStatement(content)
   }
 
-  private hasTwoRecentCompletionSignals(signals: CompletionSignal[]): boolean {
-    for (let i = 0; i < signals.length; i++) {
-      for (let j = i + 1; j < signals.length; j++) {
-        if (signals[j].timestamp - signals[i].timestamp > COMPLETION_SIGNAL_WINDOW_MS) break
-        if (signals[i].agentName !== signals[j].agentName) return true
+  /**
+   * True when EVERY active agent produced a completion signal inside one
+   * COMPLETION_SIGNAL_WINDOW_MS window — the same bar the sentinel path uses.
+   * Two agents agreeing is not the team agreeing: in a trio that ends the run
+   * for the third, which is what the comment above this call warns about.
+   */
+  private hasRecentCompletionSignalsFromAll(
+    signals: CompletionSignal[], activeAgentCount: number,
+  ): boolean {
+    if (activeAgentCount < 2) return false
+    for (let start = 0; start < signals.length; start++) {
+      const seen = new Set<string>([signals[start].agentName])
+      for (let end = start + 1; end < signals.length; end++) {
+        if (signals[end].timestamp - signals[start].timestamp > COMPLETION_SIGNAL_WINDOW_MS) break
+        seen.add(signals[end].agentName)
+        if (seen.size >= activeAgentCount) return true
       }
     }
     return false
@@ -1225,4 +1262,6 @@ export const __testing = {
   SINGLE_SIGNAL_IDLE_THRESHOLD_MS,
   COMPLETION_PATTERNS,
   CONTINUATION_PATTERNS,
+  MAX_COMPLETION_SIGNAL_LENGTH,
+  ORCHESTRATION_VOCABULARY,
 }

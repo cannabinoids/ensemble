@@ -69,6 +69,23 @@ function fillerMessages(count: number, teamId = 'team-1'): EnsembleMessage[] {
   )
 }
 
+/**
+ * Filler older than the messages a wording-path test cares about. The wording path
+ * only fires while idle sits between TWO_SIGNAL_IDLE_THRESHOLD_MS and
+ * SINGLE_SIGNAL_IDLE_THRESHOLD_MS, so the signals under test must be the newest
+ * messages in the feed.
+ */
+function olderFiller(count: number, teamId = 'team-1'): EnsembleMessage[] {
+  return Array.from({ length: count }, (_, i) =>
+    makeMessage({
+      teamId,
+      from: i % 2 === 0 ? 'codex-1' : 'claude-2',
+      content: `analysis step ${i}`,
+      timestamp: `2026-03-18T11:50:${String(i).padStart(2, '0')}.000Z`,
+    }),
+  )
+}
+
 /** A three-agent team, for checks that must not assume a pair. */
 function makeTrioTeam(): EnsembleTeam {
   return makeTeam({
@@ -316,6 +333,70 @@ describe('shouldAutoDisband() — tested via checkIdleTeams()', () => {
 
     // grok-3 has not reported yet; the conversation is 5s old.
     expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(false)
+  })
+
+  it('does NOT auto-disband a trio when only two of three used completion wording', async () => {
+    // The sentinel path already requires every agent. The wording path did not, so a
+    // quiet trio could still lose its third agent to the other two agreeing.
+    const team = makeTrioTeam()
+    const messages: EnsembleMessage[] = [
+      ...olderFiller(8),
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Ik ben klaar', timestamp: '2026-03-18T11:58:00.000Z' }),
+      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Ik ben ook klaar', timestamp: '2026-03-18T11:58:30.000Z' }),
+    ]
+
+    const { mod, appendedMessages } = await setupServiceWithMocks(team, messages)
+    await mod.checkIdleTeams()
+
+    expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(false)
+  })
+
+  it('auto-disbands a trio once all three used completion wording', async () => {
+    const team = makeTrioTeam()
+    const messages: EnsembleMessage[] = [
+      ...olderFiller(8),
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Ik ben klaar', timestamp: '2026-03-18T11:58:00.000Z' }),
+      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Ik ben ook klaar', timestamp: '2026-03-18T11:58:20.000Z' }),
+      makeMessage({ from: 'grok-3', teamId: 'team-1', content: 'Ik ben klaar', timestamp: '2026-03-18T11:58:40.000Z' }),
+    ]
+
+    const { mod, appendedMessages } = await setupServiceWithMocks(team, messages)
+    await mod.checkIdleTeams()
+
+    expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(true)
+  })
+
+  it('voids done sentinels sent before the user steered the team', async () => {
+    // An agent that had already signalled is not finished with the new instruction:
+    // the team must not disband while it answers.
+    const team = makeTeam()
+    const messages: EnsembleMessage[] = [
+      ...fillerMessages(8),
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: '<<COLLAB_DONE>>', timestamp: '2026-03-18T12:04:20.000Z' }),
+      makeMessage({ from: 'claude-2', teamId: 'team-1', content: '<<COLLAB_DONE>>', timestamp: '2026-03-18T12:04:30.000Z' }),
+      makeMessage({ from: 'user', teamId: 'team-1', content: 'One more thing: check the retry path', timestamp: '2026-03-18T12:04:45.000Z' }),
+      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'ack: checking the retry path now', timestamp: '2026-03-18T12:04:50.000Z' }),
+    ]
+
+    const { mod, appendedMessages } = await setupServiceWithMocks(team, messages)
+    await mod.checkIdleTeams()
+
+    expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(false)
+  })
+
+  it('still disbands on sentinels sent after the user steered the team', async () => {
+    const team = makeTeam()
+    const messages: EnsembleMessage[] = [
+      ...fillerMessages(8),
+      makeMessage({ from: 'user', teamId: 'team-1', content: 'wrap it up please', timestamp: '2026-03-18T12:04:20.000Z' }),
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: '<<COLLAB_DONE>>', timestamp: '2026-03-18T12:04:40.000Z' }),
+      makeMessage({ from: 'claude-2', teamId: 'team-1', content: '<<COLLAB_DONE>>', timestamp: '2026-03-18T12:04:50.000Z' }),
+    ]
+
+    const { mod, appendedMessages } = await setupServiceWithMocks(team, messages)
+    await mod.checkIdleTeams()
+
+    expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(true)
   })
 
   it('auto-disbands when two different agents send completion signals and the team went quiet', async () => {
