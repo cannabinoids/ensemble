@@ -57,6 +57,26 @@ warn() {
   echo -e "  ${YEL}!${R} $*"
 }
 
+# Run a command under a time limit, portably.
+#
+# `timeout` is GNU coreutils and is NOT on macOS, which this project targets first.
+# Without it the codex probe below died with "timeout: command not found", produced no
+# sentinel, and the probe concluded codex itself was broken — disabling a perfectly
+# healthy agent, and with an explicitly named line-up, failing the whole launch.
+# gtimeout is coreutils via brew; perl's alarm is the last resort and ships with macOS.
+with_timeout() {
+  local secs="$1"; shift
+  if command -v timeout > /dev/null 2>&1; then
+    timeout "$secs" "$@"
+  elif command -v gtimeout > /dev/null 2>&1; then
+    gtimeout "$secs" "$@"
+  elif command -v perl > /dev/null 2>&1; then
+    perl -e 'alarm shift; exec @ARGV' "$secs" "$@"
+  else
+    "$@"
+  fi
+}
+
 echo -e "${BD}collab preflight${R}"
 
 # ─── 0. API keys in the environment ───
@@ -214,7 +234,7 @@ fi
 # it. The probe then finds no sentinel and disables a perfectly healthy codex.
 # Only shows up when preflight is called from a caller whose stdin is a live
 # pipe (an agent shell, CI), which is exactly where a false negative hurts.
-CODEX_PROBE_OUT=$(timeout 40 codex exec --dangerously-bypass-approvals-and-sandbox \
+CODEX_PROBE_OUT=$(with_timeout 40 codex exec --dangerously-bypass-approvals-and-sandbox \
   "Reply with exactly this and nothing else: PROBE-OK-7391" < /dev/null 2>&1)
 if echo "$CODEX_PROBE_OUT" | grep -qiE "hit your usage limit|usage limit|rate.?limit|quota"; then
   RESET_TIME=$(echo "$CODEX_PROBE_OUT" | grep -oE "try again at[^.]*\." | head -1)
@@ -287,7 +307,7 @@ if wants grok; then
     fail 6 "grok binary not in PATH
      Fix: install the Grok CLI (https://x.ai) or check PATH"
   fi
-  GROK_AUTH=$(timeout 20 grok models 2>&1 | head -1)
+  GROK_AUTH=$(with_timeout 20 grok models 2>&1 | head -1)
   if echo "$GROK_AUTH" | grep -qiE "logged in"; then
     ok "Grok authenticated: ${GROK_AUTH:0:60}"
     GROK_DEAD=0
