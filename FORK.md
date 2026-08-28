@@ -28,10 +28,21 @@ from redoing work that has already landed upstream.
   and their archived transcripts, so it is bounded, refused if it carries key-shaped
   strings, and announced in the feed when truncated. Upstream covers the other
   direction — `lib/memory-export.ts` sends finished collabs to claude-mem.
-- **Auto-disband correctness.** The wording path requires every active agent, not any
-  two; a sign-off must be short and must not quote the orchestration; and completion is
-  counted only from the last user redirect, so a steer does not leave a stale sentinel
-  standing. Not upstreamed — see below.
+- **Auto-disband correctness** (the three cases from the now-closed issue #4, fixed
+  here rather than upstream):
+  1. *A trio does not lose its third agent.* The wording path requires every active
+     agent, not any two — the bar the sentinel path already holds. Specs: "does NOT
+     auto-disband a trio when only two of three used completion wording" / "auto-disbands
+     a trio once all three used completion wording".
+  2. *Describing the machinery is not finishing.* A sign-off must be short and must not
+     quote orchestration vocabulary, so an agent reviewing a script and quoting its
+     `---STATUS:{ACTIVE,QUIET,DONE,WAITING}` sentinel no longer ends the run. Specs in
+     `tests/premature-disband.test.ts` under "describing the machinery is not finishing".
+  3. *A sign-off does not survive a redirect.* Sentinels and wording only count from the
+     last `ensemble steer` or resume, so a team cannot disband while an agent is
+     answering the user. The cutoff gates completion evidence only — the message count
+     and idle clock still read the whole run, or a team steered near the end would never
+     meet the message floor again and would hang forever.
 - **Cost model documented and guarded.** Preflight warns when `ANTHROPIC_API_KEY` or
   `OPENAI_API_KEY` is exported, because the spawner forwards those into agent panes
   where a CLI may prefer them over the user's subscription.
@@ -40,7 +51,7 @@ from redoing work that has already landed upstream.
 
 | What | Where | Status |
 |---|---|---|
-| Auto-disband: wording path, content guards, sign-off vs `steer` | [issue #4](https://github.com/michelhelsdingen/ensemble/issues/4) | open, unanswered |
+| Auto-disband: wording path, content guards, sign-off vs `steer` | [issue #4](https://github.com/michelhelsdingen/ensemble/issues/4) | **closed by us** — fixed here instead |
 | `fix: hold the wording path to the same bar as the sentinel path` | [PR #5](https://github.com/michelhelsdingen/ensemble/pull/5) | **closed by us** |
 
 Nothing else was proposed, and nothing more is planned. PR #5 was closed rather than
