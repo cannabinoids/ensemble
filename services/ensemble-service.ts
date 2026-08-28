@@ -346,23 +346,24 @@ class EnsembleService {
   }
 
   private shouldAutoDisband(team: EnsembleTeam): boolean {
-    const allMessages = getMessages(team.id)
-    // Completion counts only from the last message the user sent. `ensemble steer`
-    // exists so a user can redirect a running team, so a sentinel or sign-off from
-    // before that redirect no longer describes the work: an agent that had already
-    // finished is not finished with the new instruction. Without this the team can
-    // disband while an agent is mid-answer to the user.
+    const messages = getMessages(team.id)
+    // `ensemble steer` (and a resume) exist so a user can redirect a running team, so
+    // a sentinel or sign-off from before that redirect no longer describes the work.
+    //
+    // This gates completion EVIDENCE only. The message count and the idle clock still
+    // read the whole run: filtering those too resets the min-message floor on every
+    // steer, and a team that finishes shortly after being steered — in words rather
+    // than the sentinel — then never meets the floor again and stays active forever.
     const resumedAtMs = team.lastResumedAt ? new Date(team.lastResumedAt).getTime() : 0
-    const lastUserMessageMs = allMessages
+    const lastUserMessageMs = messages
       .filter(message => message.from === 'user' && message.timestamp)
       .reduce((latest, message) => Math.max(latest, new Date(message.timestamp).getTime() || 0), 0)
     const cutoffMs = Math.max(resumedAtMs, lastUserMessageMs)
-    const messages = cutoffMs
-      ? allMessages.filter(message => {
-        const ts = message.timestamp ? new Date(message.timestamp).getTime() : NaN
-        return Number.isNaN(ts) || ts >= cutoffMs
-      })
-      : allMessages
+    const isAfterLastRedirect = (message: EnsembleMessage): boolean => {
+      if (!cutoffMs) return true
+      const ts = message.timestamp ? new Date(message.timestamp).getTime() : NaN
+      return Number.isNaN(ts) || ts >= cutoffMs
+    }
     const nonEnsembleMessages = messages.filter(message => message.from !== 'ensemble')
     const lastMessage = nonEnsembleMessages[nonEnsembleMessages.length - 1]
     if (!lastMessage) return false
@@ -375,7 +376,7 @@ class EnsembleService {
     const activeNames = new Set(team.agents.filter(a => a.status === 'active').map(a => a.name))
     const sentinelSenders = new Set(
       messages
-        .filter(m => activeNames.has(m.from) && m.content.trim() === EXPLICIT_DONE_SENTINEL)
+        .filter(m => activeNames.has(m.from) && isAfterLastRedirect(m) && m.content.trim() === EXPLICIT_DONE_SENTINEL)
         .map(m => m.from),
     )
     if (activeNames.size >= 2 && sentinelSenders.size >= activeNames.size) return true
@@ -395,7 +396,8 @@ class EnsembleService {
     const idleForMs = Date.now() - lastTimestamp
     const activeAgentNames = new Set(activeAgents.map(agent => agent.name))
     const completionSignals = messages
-      .filter(message => activeAgentNames.has(message.from) && this.hasCompletionSignal(message.content))
+      .filter(message => activeAgentNames.has(message.from) && isAfterLastRedirect(message)
+        && this.hasCompletionSignal(message.content))
       .map(message => ({
         agentName: message.from,
         timestamp: message.timestamp ? new Date(message.timestamp).getTime() : NaN,

@@ -366,6 +366,52 @@ describe('shouldAutoDisband() — tested via checkIdleTeams()', () => {
     expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(true)
   })
 
+  it('still ends a team that finishes shortly after being steered', async () => {
+    // The redirect cutoff gates completion evidence, not the message count or the
+    // idle clock. Filtering those too resets the min-message floor on every steer, so
+    // a team that wraps up in words rather than the sentinel right after a redirect
+    // never meets the floor again and stays active forever.
+    const team = makeTeam()
+    const messages: EnsembleMessage[] = [
+      ...Array.from({ length: 12 }, (_, i) => makeMessage({
+        teamId: 'team-1',
+        from: i % 2 === 0 ? 'codex-1' : 'claude-2',
+        content: `analysis step ${i}`,
+        timestamp: `2026-03-18T11:30:${String(i).padStart(2, '0')}.000Z`,
+      })),
+      makeMessage({ from: 'user', teamId: 'team-1', content: 'also check the retry path', timestamp: '2026-03-18T11:50:00.000Z' }),
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'ack: checking the retry path', timestamp: '2026-03-18T11:50:10.000Z' }),
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Ik ben klaar', timestamp: '2026-03-18T11:52:00.000Z' }),
+      makeMessage({ from: 'claude-2', teamId: 'team-1', content: 'Ik ben ook klaar', timestamp: '2026-03-18T11:52:30.000Z' }),
+    ]
+
+    const { mod, appendedMessages } = await setupServiceWithMocks(team, messages)
+    await mod.checkIdleTeams()
+
+    expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(true)
+  })
+
+  it('still ends a single-agent team through the idle path', async () => {
+    // Both the sentinel path and the all-agents wording path require two or more
+    // agents, so a solo team can only end via the long-idle fallback. Locking that in:
+    // a solo run must not become unendable.
+    const team = makeTeam({
+      agents: [{ agentId: 'a1', name: 'codex-1', program: 'codex', role: 'lead', hostId: 'local', status: 'active' }],
+    })
+    const messages: EnsembleMessage[] = [
+      ...Array.from({ length: 12 }, (_, i) => makeMessage({
+        teamId: 'team-1', from: 'codex-1', content: `analysis step ${i}`,
+        timestamp: `2026-03-18T11:30:${String(i).padStart(2, '0')}.000Z`,
+      })),
+      makeMessage({ from: 'codex-1', teamId: 'team-1', content: 'Ik ben klaar', timestamp: '2026-03-18T11:50:00.000Z' }),
+    ]
+
+    const { mod, appendedMessages } = await setupServiceWithMocks(team, messages)
+    await mod.checkIdleTeams()
+
+    expect(appendedMessages.some(m => m.content.includes('Auto-disband'))).toBe(true)
+  })
+
   it('voids done sentinels sent before the user steered the team', async () => {
     // An agent that had already signalled is not finished with the new instruction:
     // the team must not disband while it answers.
