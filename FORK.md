@@ -28,6 +28,10 @@ from redoing work that has already landed upstream.
   and their archived transcripts, so it is bounded, refused if it carries key-shaped
   strings, and announced in the feed when truncated. Upstream covers the other
   direction — `lib/memory-export.ts` sends finished collabs to claude-mem.
+- **Auto-disband correctness.** The wording path requires every active agent, not any
+  two; a sign-off must be short and must not quote the orchestration; and completion is
+  counted only from the last user redirect, so a steer does not leave a stale sentinel
+  standing. Not upstreamed — see below.
 - **Cost model documented and guarded.** Preflight warns when `ANTHROPIC_API_KEY` or
   `OPENAI_API_KEY` is exported, because the spawner forwards those into agent panes
   where a CLI may prefer them over the user's subscription.
@@ -36,13 +40,20 @@ from redoing work that has already landed upstream.
 
 | What | Where | Status |
 |---|---|---|
-| Auto-disband: wording path, content guards, sign-off vs `steer` | [issue #4](https://github.com/michelhelsdingen/ensemble/issues/4) | open |
-| `fix: hold the wording path to the same bar as the sentinel path` | [PR #5](https://github.com/michelhelsdingen/ensemble/pull/5) | open |
+| Auto-disband: wording path, content guards, sign-off vs `steer` | [issue #4](https://github.com/michelhelsdingen/ensemble/issues/4) | open, unanswered |
+| `fix: hold the wording path to the same bar as the sentinel path` | [PR #5](https://github.com/michelhelsdingen/ensemble/pull/5) | **closed by us** |
 
-The interjection, transcript-isolation and ollama work has **not** been proposed
-upstream. It changes behaviour rather than fixing defects — transcript archiving in
-particular moves files under the user's `~/.claude` — so it waits until there is a
-reason to think the direction is wanted.
+Nothing else was proposed, and nothing more is planned. PR #5 was closed rather than
+left stale: upstream raised the idle thresholds in `1782034`, which absorbed most of
+the practical risk, and the remaining changes sit in a function upstream is actively
+iterating on — a standing PR there is friction for the maintainer, not help. The
+reproductions in issue #4 stand on their own if they are ever wanted.
+
+**Posture from here: track, do not propose.** Read what upstream ships, take what is
+better than ours, keep the rest local. Expect convergence rather than conflict — both
+sides are solving the same problems from the same evidence, and upstream has repeatedly
+arrived at the same conclusions independently (the sentinel-path fix, agent-scoped
+preflight, and progress-vs-completion wording all landed there before or beside ours).
 
 ## Before starting work here
 
